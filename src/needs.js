@@ -11,6 +11,10 @@ const FUEL_IDLE_HOURS = 150; // a full tank lasts this long idling
 const FUEL_CRUISE_HOURS = 50; // ...and this long driving at highway speed
 const HIGHWAY_SPEED = 26.8; // m/s (60 mph)
 
+// Running on empty wears you out: energy drains this much faster at 0% hunger / thirst.
+const STARVING_ENERGY_DRAIN = 1.5;
+const DEHYDRATED_ENERGY_DRAIN = 5;
+
 const SLEEP_ENERGY_PER_HOUR = 12.5; // 8 hours takes you from empty to full
 const SLEEP_DRAIN_FACTOR = 0.5; // the body slows down while asleep
 
@@ -25,9 +29,16 @@ export class Needs {
     this.money = STARTING_MONEY; // whole dollars
   }
 
+  // How much faster than normal energy is draining right now.
+  get energyDrainFactor() {
+    return (this.values.hunger <= 0 ? STARVING_ENERGY_DRAIN : 1) * (this.values.thirst <= 0 ? DEHYDRATED_ENERGY_DRAIN : 1);
+  }
+
   update(hours, { engineOn, speed }) {
     for (const n of NEEDS) {
-      if (n.hoursToEmpty) this.values[n.key] = clamp(this.values[n.key] - perHour(n.hoursToEmpty) * hours);
+      if (!n.hoursToEmpty) continue;
+      const factor = n.key === 'energy' ? this.energyDrainFactor : 1;
+      this.values[n.key] = clamp(this.values[n.key] - perHour(n.hoursToEmpty) * factor * hours);
     }
     if (engineOn) {
       const driving = Math.min(Math.abs(speed) / HIGHWAY_SPEED, 1);
@@ -45,6 +56,11 @@ export class Needs {
       else if (n.hoursToEmpty) after[n.key] = clamp(after[n.key] - perHour(n.hoursToEmpty) * hours * SLEEP_DRAIN_FACTOR);
     }
     return after;
+  }
+
+  // Hours of sleep it takes to get energy back up to a level.
+  hoursToReach(energy) {
+    return Math.max(0, (energy - this.values.energy) / SLEEP_ENERGY_PER_HOUR);
   }
 
   sleep(hours) {

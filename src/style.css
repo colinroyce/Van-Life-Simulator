@@ -460,3 +460,49 @@ kbd {
   font-weight: 800;
   line-height: 14px;
 }
+
+/* --- thought bubble --- */
+#thought {
+  position: absolute;
+  left: 50%;
+  top: 70px;
+  max-width: min(420px, 80vw);
+  padding: 12px 18px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #2b2d31;
+  font-size: 15px;
+  font-style: italic;
+  text-align: center;
+  text-shadow: none;
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3);
+  transform: translateX(-50%) scale(0.9);
+  opacity: 0;
+  transition: opacity 0.35s, transform 0.35s;
+}
+
+#thought.on {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
+
+/* little trailing puffs of the bubble */
+#thought i {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+#thought i:nth-of-type(1) {
+  width: 14px;
+  height: 14px;
+  left: 30%;
+  bottom: -18px;
+}
+
+#thought i:nth-of-type(2) {
+  width: 8px;
+  height: 8px;
+  left: 26%;
+  bottom: -30px;
+}

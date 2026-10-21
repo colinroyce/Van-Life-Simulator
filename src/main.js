@@ -11,8 +11,10 @@ import { GameClock, GAME_MINUTES_PER_SECOND } from './clock.js';
 import { SleepWheel } from './ui/sleepWheel.js';
 import { createFuelGauge } from './ui/fuelGauge.js';
 import { fade, fadeThrough, setCaption } from './ui/fade.js';
+import { HygieneThoughts } from './ui/thoughts.js';
 import { Hotbar } from './items/hotbar.js';
 import { ItemSystem, describeItem } from './items/items.js';
+import { Fueling } from './items/fueling.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -49,11 +51,20 @@ const sleepWheel = new SleepWheel(document.getElementById('sleep-wheel'));
 scene.add(player.camera); // so things held in front of it render
 const hotbar = new Hotbar(document.getElementById('hotbar'), describeItem, 6);
 const items = new ItemSystem({ scene, van, player, hotbar, needs, world, audio, notify: (t) => flashCamLabel(t) });
+const fueling = new Fueling({ scene, station: world.fuelStation, van, items, needs, audio, notify: (t) => flashCamLabel(t) });
+// Pump, fuel door and driver door are handled here rather than by the item system
+items.extraAction = (fixture) => {
+  if (fixture === 'driverDoor') {
+    if (!van.driverDoorOpen) return { label: 'Open driver door', run: () => van.setDriverDoorOpen(true) };
+    return { label: 'Get in', run: () => sitDown(), alt: { key: 'Q', label: 'Close door', run: () => van.setDriverDoorOpen(false) } };
+  }
+  return fueling.action(fixture);
+};
 
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, get mode() { return mode; } };
 
 function reset() {
   sim.reset(SPAWN.position, SPAWN.yaw);
@@ -132,9 +143,28 @@ function getUp() {
   setMode('walk');
 }
 
+// Looking out the driver's window from the seat (and stopped) lets you get out that side.
+const LOOKING_AT_DOOR = 0.75; // head turned left, radians
+
+function canGetOutDriverSide() {
+  return cameras.mode === 'cockpit' && cameras.look.yaw > LOOKING_AT_DOOR && Math.abs(sim.speed) <= 0.5;
+}
+
+function getOutDriverSide() {
+  sim.speed = 0;
+  van.setDriverDoorOpen(true);
+  van.driverDoorT = 1; // already swung open as you step out, so it doesn't sweep you aside
+  player.standOutside(van, new THREE.Vector3(1.55, 0, 1.0), Math.PI / 2);
+  van.setOccupant('empty');
+  cameras.resetLook();
+  setMode('walk');
+}
+
 function sitDown() {
   cameras.resetLook();
+  fueling.release();
   van.setDoorOpen(false);
+  van.setDriverDoorOpen(false);
   van.setOccupant(cameras.mode);
   setMode('drive');
 }
@@ -147,18 +177,36 @@ function openSleepWheel() {
 }
 
 // Fade out, let the hours tick by on the clock, wake up with the meters updated.
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
 function sleep(hours) {
   sleepWheel.close();
+  sleepFor(hours, `You slept ${plural(hours, 'hour')}`);
+}
+
+// Collapsing from exhaustion: out cold until energy is back to half.
+const PASS_OUT_WAKE_ENERGY = 50;
+
+function passOut() {
+  if (sleepWheel.isOpen) sleepWheel.close();
+  sim.speed = 0;
+  const hours = Math.ceil(needs.hoursToReach(PASS_OUT_WAKE_ENERGY));
+  setCaption('You passed out from exhaustion…');
+  sleepFor(hours, `You passed out for ${plural(hours, 'hour')}`, 'You passed out…');
+}
+
+// Fade out, let the hours tick by on the clock, wake up with the meters updated.
+function sleepFor(hours, wakeText, sleepingText = 'Zzz…') {
   const from = clock.minutes;
   fadeThrough({
     out: 900,
     back: 1100,
-    text: `You slept ${hours} hour${hours === 1 ? '' : 's'}`,
+    text: wakeText,
     onBlack: async () => {
       const steps = 40;
       for (let i = 1; i <= steps; i++) {
         clock.minutes = from + (hours * 60 * i) / steps;
-        setCaption(`Zzz…  ${clock.label()}`);
+        setCaption(`${sleepingText}  ${clock.label()}`);
         await new Promise((r) => setTimeout(r, 40));
       }
       needs.sleep(hours);
@@ -185,7 +233,8 @@ onKey('KeyE', () => {
   if (sleepWheel.isOpen) return sleep(sleepWheel.hours);
   if (mode === 'drive') {
     const drink = cameras.mode === 'cockpit' && items.cockpitAction(cameras.cockpit);
-    return drink ? drink.run() : getUp();
+    if (drink) return drink.run();
+    return canGetOutDriverSide() ? getOutDriverSide() : getUp();
   }
   const itemAction = items.actions().e;
   if (itemAction) return itemAction.run();
@@ -200,7 +249,9 @@ onKey('KeyE', () => {
   if (action === 'sleep') openSleepWheel();
 });
 onKey('KeyQ', () => {
-  if (!busy() && player.lying) player.getOutOfBed(van);
+  if (busy() || mode !== 'walk') return;
+  if (player.lying) return player.getOutOfBed(van);
+  items.actions().e?.alt?.run();
 });
 onKey('Escape', () => sleepWheel.isOpen && sleepWheel.close());
 for (const [code, delta] of [['KeyA', -1], ['ArrowLeft', -1], ['KeyD', 1], ['ArrowRight', 1]]) {
@@ -247,6 +298,25 @@ window.addEventListener('resize', () => {
   player.camera.updateProjectionMatrix();
 });
 
+// --- running on empty ---
+const hygieneThoughts = new HygieneThoughts();
+let wasRunning = false;
+let noFuelNotice = 0;
+let blurPx = 0;
+
+function showConsequences() {
+  // Exhaustion: the world blurs below 10% energy, and at 0% you pass out
+  const energy = needs.values.energy;
+  const blur = energy < 10 ? Math.round((1 - energy / 10) * 40) / 10 : 0; // up to 4px
+  if (blur !== blurPx) {
+    renderer.domElement.style.filter = blur ? `blur(${blur}px)` : '';
+    blurPx = blur;
+  }
+  if (energy <= 0 && !busy()) passOut();
+
+  hygieneThoughts.update(needs.values.hygiene);
+}
+
 // --- loop ---
 const frameClock = new THREE.Clock();
 const STEP = 1 / 120;
@@ -258,10 +328,21 @@ function tick(dt) {
   let impact = 0;
   let coneHit = 0;
 
+  // Out of fuel the engine dies: no power (forward or reverse), but you can still coast and brake.
+  const engineRunning = mode === 'drive' && needs.values.fuel > 0;
+  const coasting = { ...driveInput, throttle: 0, brake: sim.speed > 0.5 ? driveInput.brake : 0 };
+  if (mode === 'drive' && !engineRunning && wasRunning) flashCamLabel("You're out of fuel. The engine died.");
+  wasRunning = engineRunning;
+  noFuelNotice -= dt;
+  if (mode === 'drive' && !engineRunning && driveInput.throttle && noFuelNotice <= 0) {
+    flashCamLabel('No fuel. Get to a gas pump.');
+    noFuelNotice = 3;
+  }
+
   if (mode === 'drive') {
     acc += dt;
     while (acc >= STEP) {
-      sim.update(STEP, driveInput);
+      sim.update(STEP, engineRunning ? driveInput : coasting);
       impact = Math.max(impact, sim.collide(world.obstacles, BOUNDS));
       coneHit = Math.max(coneHit, world.update(STEP, sim));
       acc -= STEP;
@@ -284,11 +365,14 @@ function tick(dt) {
     const drink = cockpit && items.cockpitAction(cameras.cockpit);
     const stopped = Math.abs(sim.speed) <= 0.5;
     hud.prompt.hidden = !drink && !stopped;
-    hud.prompt.innerHTML = drink ? `<kbd>E</kbd> ${drink.label}` : '<kbd>E</kbd> Get up';
+    const getUpLabel = canGetOutDriverSide() ? 'Get out' : 'Get up';
+    hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : getUpLabel}`;
     hud.crosshair.hidden = !(cockpit && isPointerLocked());
     hud.heldHint.textContent = '';
     hud.lookHint.hidden = true;
     items.update(dt, false);
+    fueling.update(dt, player.position);
+    van.setFuelDoorHighlight(false);
   } else {
     const still = { forward: 0, strafe: 0, turn: 0, run: false };
     player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world, BOUNDS);
@@ -296,6 +380,8 @@ function tick(dt) {
     focus = player.position;
     items.aim(player.camera);
     items.update(dt, true);
+    fueling.update(dt, player.position);
+    van.setFuelDoorHighlight(items.target?.fixture === 'fuelDoor' && !busy(), clock.minutes);
     const { e: itemAction, g: placeAction, r: combineAction } = items.actions();
     const it = itemAction ?? player.interaction(van);
     const parts = [];
@@ -306,7 +392,8 @@ function tick(dt) {
     hud.prompt.hidden = !parts.length || busy();
     hud.prompt.innerHTML = parts.join(' &nbsp; ');
     const held = hotbar.held;
-    hud.heldHint.textContent = held ? [describeItem(held).name, items.useHint].filter(Boolean).join(' · ') : '';
+    if (fueling.inHand) hud.heldHint.textContent = 'Fuel nozzle · E at the van\'s fuel door';
+    else hud.heldHint.textContent = held ? [describeItem(held).name, items.useHint].filter(Boolean).join(' · ') : '';
     hud.crosshair.hidden = false;
     hud.lookHint.hidden = isPointerLocked() || busy();
   }
@@ -316,13 +403,14 @@ function tick(dt) {
   if (!sleepWheel.isOpen) {
     const gameMinutes = dt * GAME_MINUTES_PER_SECOND;
     clock.advance(gameMinutes);
-    needs.update(gameMinutes / 60, { engineOn: !walking, speed: sim.speed });
+    needs.update(gameMinutes / 60, { engineOn: engineRunning, speed: sim.speed });
   }
   renderNeeds();
+  showConsequences();
 
   audio.update(dt, {
     listener: walking ? (player.inside ? 'inside' : 'outside') : cameras.mode,
-    engineOn: !walking,
+    engineOn: engineRunning,
     rpm: sim.rpm,
     load: sim.load,
     speed: sim.speed,
@@ -340,6 +428,9 @@ function tick(dt) {
     sizzle: items.stove.sizzle,
     burning: items.stove.burning,
     fridgeOpen: van.buildout.fridgeOpen,
+    driverDoorOpen: van.driverDoorOpen,
+    fuelDoorOpen: van.fuelDoorOpen,
+    pumping: fueling.pumping,
     lying: player.lying,
     walking,
     inside: player.inside,
