@@ -64,6 +64,7 @@ function vanWalls(van) {
     [[-w + dx, d0 + dz], [-w + dx, d1 + dz]], // sliding door panel
     ...LAYOUT.walls, // bathroom
     van.buildout.bathDoorSegment(),
+    van.buildout.fridgeDoorSegment(),
   ];
 }
 
@@ -170,6 +171,9 @@ export class Player {
     this.position.y = 0;
 
     if (this.inside) return;
+    for (let i = 0; i < 2; i++) {
+      for (const [a, b] of world.walls()) pushFromSegment(this.position, a, b, RADIUS);
+    }
     for (const o of world.obstacles) {
       const dx = this.position.x - o.x;
       const dz = this.position.z - o.z;
@@ -185,7 +189,7 @@ export class Player {
 
   // What E would do right now, or null. Picks the nearby thing you're most facing.
   interaction(van) {
-    if (this.lying) return { action: 'getup', label: 'Get up' };
+    if (this.lying) return { action: 'sleep', label: 'Sleep…', alt: { key: 'Q', action: 'getup', label: 'Get up' } };
     const p = this.local;
     const [d0, d1] = LAYOUT.door;
     const bd = LAYOUT.bathDoor;
@@ -202,7 +206,7 @@ export class Player {
       const t = LAYOUT.toilet;
       candidates = [
         bathDoor,
-        { action: 'shower', label: van.showerOn ? 'Turn off shower' : 'Turn on shower', at: [sv.x, sv.z], range: 1.0 },
+        { action: 'shower', label: 'Take a shower', at: [sv.x, sv.z], range: 1.0 },
         { action: 'flush', label: 'Flush toilet', at: [t.x, t.z], range: 0.8 },
       ];
     } else {

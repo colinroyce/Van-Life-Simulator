@@ -59,3 +59,15 @@ export function takeMouseDelta() {
 export function isPointerLocked() {
   return !!document.pointerLockElement;
 }
+
+// Left click while the mouse is captured (using the held item).
+export function onLockedClick(fn) {
+  window.addEventListener('mousedown', (e) => {
+    if (e.button === 0 && document.pointerLockElement) fn();
+  });
+}
+
+// Scroll wheel steps: +1 down, -1 up.
+export function onScroll(fn) {
+  window.addEventListener('wheel', (e) => fn(Math.sign(e.deltaY)), { passive: true });
+}

@@ -33,6 +33,20 @@ export const BUILD = {
   showerHead: new THREE.Vector3(0.62, 2.48, -0.06), // rain head hanging from the ceiling
   showerValve: new THREE.Vector3(0.62, 1.55, BATH.z1 - BATH.wall - 0.01), // on the front wall
   toilet: new THREE.Vector3(0.68, 0, -0.7),
+  faucetTip: new THREE.Vector3(-0.71, 1.82, -0.65),
+  burner: new THREE.Vector3(-0.64, 1.618, -1.33), // front burner, where the skillet sits
+  // Spots inside the van fridge (floor and shelf), toward the front where you can see them
+  // looking down into this low fridge
+  fridgeSlots: [
+    new THREE.Vector3(0.49, 0.8, -1.4), new THREE.Vector3(0.49, 0.8, -1.14),
+    new THREE.Vector3(0.49, 1.14, -1.4), new THREE.Vector3(0.49, 1.14, -1.14),
+  ],
+  // Bottle holders (base of the bottle): on the aisle side of the fridge tower at the head of the
+  // bed (reachable from the aisle and from bed), and on the counter by the sink.
+  holders: [
+    { id: 'bed', label: 'bedside holder', at: new THREE.Vector3(0.302, 1.9, -1.52), mount: 'wall', wall: '+x' },
+    { id: 'sink', label: 'sink holder', at: new THREE.Vector3(-0.64, 1.6, -0.4), mount: 'counter' },
+  ],
   bedFront: new THREE.Vector3(0, 0, -1.57),
   bedStand: new THREE.Vector3(0, 0, -1.3), // where you end up after getting out of bed
   bedHead: new THREE.Vector3(0.62, 1.98, -2.3), // eyes, lying with your head on the pillows
@@ -65,6 +79,9 @@ const FROSTED = mat(0xf2f4f5, { roughness: 0.3, transparent: true, opacity: 0.85
 const PORCELAIN = mat(0xf4f4f1, { roughness: 0.25 });
 const TOILET_SEAT = mat(0xd9dad6, { roughness: 0.4 });
 const SWITCH = mat(0xf2f0ea);
+// Fridge liner glows a little while the door is open (the fridge light)
+const FRIDGE_LINER = mat(0xeef1f3, { roughness: 0.4, emissive: 0xdfeaff, emissiveIntensity: 0 });
+const FRIDGE_SHELF = mat(0xcfe3ea, { roughness: 0.1, transparent: true, opacity: 0.6 });
 // Light-emitting surfaces: dim when off, glowing when the lights are on
 const PUCK = mat(0xfff3dc, { emissive: 0xffd9a0, emissiveIntensity: 0 });
 const LED = mat(0xfff3dc, { emissive: 0xffc27a, emissiveIntensity: 0 });
@@ -104,35 +121,76 @@ function buildGalley() {
   // Butcher-block counter
   g.add(slab(-0.95, -0.32, 1.56, 1.6, -1.585, -0.335, BUTCHER));
 
-  // Sink near the door, with a black gooseneck faucet
-  g.add(slab(-0.82, -0.46, 1.6, 1.606, -0.83, -0.47, STEEL));
-  g.add(slab(-0.8, -0.48, 1.6, 1.608, -0.81, -0.49, STEEL_DARK));
-  g.add(slab(-0.9, -0.87, 1.6, 1.9, -0.665, -0.635, HARDWARE));
-  g.add(slab(-0.9, -0.7, 1.885, 1.905, -0.66, -0.64, HARDWARE));
-  g.add(slab(-0.72, -0.7, 1.82, 1.905, -0.66, -0.64, HARDWARE));
+  // Sink near the door, with a black gooseneck faucet (tagged so you can aim at it to fill up)
+  const sink = new THREE.Group();
+  sink.userData.fixture = 'sink';
+  sink.add(slab(-0.82, -0.46, 1.6, 1.606, -0.83, -0.47, STEEL));
+  sink.add(slab(-0.8, -0.48, 1.6, 1.608, -0.81, -0.49, STEEL_DARK));
+  sink.add(slab(-0.9, -0.87, 1.6, 1.9, -0.665, -0.635, HARDWARE));
+  sink.add(slab(-0.9, -0.7, 1.885, 1.905, -0.66, -0.64, HARDWARE));
+  sink.add(slab(-0.72, -0.7, 1.82, 1.905, -0.66, -0.64, HARDWARE));
+  g.add(sink);
 
-  // Two-burner cooktop
-  g.add(slab(-0.84, -0.44, 1.6, 1.612, -1.45, -0.95, GLASS_TOP));
+  // Two-burner cooktop (tagged so you can aim at it to cook)
+  const cooktop = new THREE.Group();
+  cooktop.userData.fixture = 'stove';
+  cooktop.add(slab(-0.84, -0.44, 1.6, 1.612, -1.45, -0.95, GLASS_TOP));
   for (const z of [-1.33, -1.07]) {
     const burner = new THREE.Mesh(new THREE.TorusGeometry(0.065, 0.008, 4, 16), STEEL_DARK);
     burner.rotation.x = Math.PI / 2;
     burner.position.set(-0.64, 1.616, z);
-    g.add(burner);
-    g.add(slab(-0.73, -0.55, 1.614, 1.624, z - 0.006, z + 0.006, HARDWARE)); // grate
-    g.add(slab(-0.646, -0.634, 1.614, 1.624, z - 0.09, z + 0.09, HARDWARE));
+    cooktop.add(burner);
+    cooktop.add(slab(-0.73, -0.55, 1.614, 1.624, z - 0.006, z + 0.006, HARDWARE)); // grate
+    cooktop.add(slab(-0.646, -0.634, 1.614, 1.624, z - 0.09, z + 0.09, HARDWARE));
   }
+  g.add(cooktop);
   return g;
 }
 
+// Fridge compartment in the tower, opening toward the aisle.
+const FRIDGE_BOX = { face: 0.36, back: 0.86, bottom: 0.78, top: 1.5, z0: -1.55, z1: -0.99 };
+const FRIDGE_OPEN = -1.75; // door swing (radians)
+
 function buildTower() {
   const g = new THREE.Group();
-  const face = 0.36; // facing the aisle (-X)
-  g.add(slab(face, 0.9, FLOOR, 2.3, -1.57, -0.97, BIRCH));
-  g.add(slab(face - 0.015, face, 0.78, 1.5, -1.55, -0.99, FRIDGE));
-  g.add(slab(face - 0.03, face - 0.015, 1.15, 1.42, -1.04, -1.02, STEEL));
+  const { face, back, bottom, top, z0, z1 } = FRIDGE_BOX;
+  // Carcass around the fridge cavity
+  g.add(slab(face, 0.9, FLOOR, bottom, -1.57, -0.97, BIRCH));
+  g.add(slab(face, 0.9, top, 2.3, -1.57, -0.97, BIRCH));
+  g.add(slab(back, 0.9, bottom, top, -1.57, -0.97, BIRCH));
+  g.add(slab(face, back, bottom, top, -1.57, z0, BIRCH));
+  g.add(slab(face, back, bottom, top, z1, -0.97, BIRCH));
+  // White liner and a glass shelf (aiming inside offers to close the fridge)
+  const t = 0.015;
+  const liner = new THREE.Group();
+  liner.userData.fixture = 'fridge';
+  liner.add(slab(face, back, bottom, bottom + t, z0, z1, FRIDGE_LINER));
+  liner.add(slab(face, back, top - t, top, z0, z1, FRIDGE_LINER));
+  liner.add(slab(back - t, back, bottom, top, z0, z1, FRIDGE_LINER));
+  liner.add(slab(face, back, bottom, top, z0, z0 + t, FRIDGE_LINER));
+  liner.add(slab(face, back, bottom, top, z1 - t, z1, FRIDGE_LINER));
+  g.add(liner);
+  // (you can reach past the glass shelf to the bottom of the fridge)
+  const shelf = slab(face + 0.02, back - t, 1.13, 1.14, z0 + t, z1 - t, FRIDGE_SHELF);
+  shelf.userData.noAim = true;
+  g.add(shelf);
+
   g.add(slab(face - 0.015, face, 1.53, 2.27, -1.55, -0.99, BIRCH_FRONT));
   g.add(handle(face - 0.025, 1.75, -1.03, true));
   return g;
+}
+
+// Fridge door, hinged at its back edge so it swings out into the aisle.
+function buildFridgeDoor() {
+  const { face, bottom, top, z0, z1 } = FRIDGE_BOX;
+  const pivot = new THREE.Group();
+  pivot.position.set(face, 0, z0);
+  pivot.userData.fixture = 'fridge';
+  const w = z1 - z0;
+  pivot.add(slab(-0.015, 0, bottom, top, 0, w, FRIDGE));
+  pivot.add(slab(0, 0.004, bottom + 0.02, top - 0.02, 0.02, w - 0.02, FRIDGE_LINER));
+  pivot.add(slab(-0.03, -0.015, 1.15, 1.42, w - 0.05, w - 0.03, STEEL)); // handle
+  return pivot;
 }
 
 // Birch-clad wet bath: white shower walls inside, cassette toilet at the back, rain shower at the front.
@@ -299,6 +357,11 @@ export class Buildout {
     this.bathDoorOpen = false;
     this.bathDoorT = 0;
 
+    this.fridgeDoor = buildFridgeDoor();
+    this.group.add(this.fridgeDoor);
+    this.fridgeOpen = false;
+    this.fridgeT = 0;
+
     // Shower water: drops falling from the head, recycled when they reach the pan.
     // Each drop is drawn as a short streak along its velocity.
     this.drops = new Float32Array(WATER_DROPS * 3);
@@ -308,6 +371,7 @@ export class Buildout {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(this.streaks, 3));
     this.water = new THREE.LineSegments(geo, WATER);
+    this.water.userData.noAim = true;
     this.water.frustumCulled = false;
     this.water.visible = false;
     this.group.add(this.water);
@@ -330,6 +394,18 @@ export class Buildout {
   }
 
   // Current bath door panel as a wall segment (van-local x/z), for walking collisions.
+  setFridgeOpen(open) {
+    this.fridgeOpen = open;
+  }
+
+  // The fridge door as a wall segment (it sticks out into the aisle when open).
+  fridgeDoorSegment() {
+    const a = this.fridgeDoor.rotation.y;
+    const { face, z0, z1 } = FRIDGE_BOX;
+    const w = z1 - z0;
+    return [[face, z0], [face + w * Math.sin(a), z0 + w * Math.cos(a)]];
+  }
+
   bathDoorSegment() {
     const { x, z0, z1 } = POCKET_DOOR;
     const dz = this.bathDoor.position.z;
@@ -340,6 +416,11 @@ export class Buildout {
     this.bathDoorT = THREE.MathUtils.clamp(this.bathDoorT + (this.bathDoorOpen ? 1 : -1) * dt * 2.2, 0, 1);
     const t = this.bathDoorT;
     this.bathDoor.position.z = -POCKET_DOOR.travel * t * t * (3 - 2 * t);
+
+    this.fridgeT = THREE.MathUtils.clamp(this.fridgeT + (this.fridgeOpen ? 1 : -1) * dt * 3, 0, 1);
+    const f = this.fridgeT;
+    this.fridgeDoor.rotation.y = FRIDGE_OPEN * f * f * (3 - 2 * f);
+    FRIDGE_LINER.emissiveIntensity = this.fridgeOpen ? 0.35 : 0;
 
     if (!this.showerOn) return;
     for (let i = 0; i < WATER_DROPS; i++) {

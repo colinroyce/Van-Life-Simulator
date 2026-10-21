@@ -31,6 +31,7 @@ export class GameAudio {
     this.prevLights = false;
     this.prevLying = false;
     this.prevBathDoor = false;
+    this.prevFridge = false;
   }
 
   // Browsers only allow audio after a user gesture, so this is called from input handlers.
@@ -64,6 +65,13 @@ export class GameAudio {
     this.#buildHorn();
     this.#buildAmbient();
     this.#buildShower();
+    this.#buildFaucet();
+    this.#buildSizzle();
+  }
+
+  // One-shots can be triggered straight from gameplay, possibly before audio is unlocked.
+  get #ready() {
+    return this.ctx?.state === 'running';
   }
 
   toggleMute() {
@@ -156,6 +164,20 @@ export class GameAudio {
     this.shower.connect(this.direct);
   }
 
+  #buildFaucet() {
+    const ctx = this.ctx;
+    this.faucet = S.gain(ctx, 0);
+    S.chain(S.loop(ctx, this.white), S.filter(ctx, 'bandpass', 2200, 0.8), this.faucet, this.direct);
+  }
+
+  // Frying: bright hiss plus random fat pops, louder and crackly when burning
+  #buildSizzle() {
+    const ctx = this.ctx;
+    this.sizzle = S.gain(ctx, 0);
+    S.chain(S.loop(ctx, this.white), S.filter(ctx, 'highpass', 3500, 0.7), this.sizzle, this.direct);
+    this.popTimer = 0;
+  }
+
   // Called every frame with a snapshot of the game.
   update(dt, st) {
     if (!this.ctx || this.ctx.state !== 'running') return;
@@ -172,6 +194,13 @@ export class GameAudio {
     this.#updateRoad(st);
     S.glide(ctx, this.horn.gain, st.horn ? 0.32 : 0, 0.01);
     S.glide(ctx, this.shower.gain, st.showerOn ? 0.12 : 0, 0.15);
+    S.glide(ctx, this.faucet.gain, st.faucetOn ? 0.1 : 0, 0.08);
+    S.glide(ctx, this.sizzle.gain, st.sizzle * (st.burning ? 0.09 : 0.06), 0.2);
+    this.popTimer -= dt;
+    if (st.sizzle > 0 && this.popTimer <= 0) {
+      S.noiseHit(ctx, this.direct, this.white, { freq: 2500 + Math.random() * 2500, q: 2, peak: 0.08 * st.sizzle, decay: 0.015 });
+      this.popTimer = (st.burning ? 0.05 : 0.12) + Math.random() * 0.15;
+    }
     this.#triggers(dt, st);
 
     this.birdTimer -= dt;
@@ -266,6 +295,8 @@ export class GameAudio {
     this.prevDoorT = st.doorT;
 
     if (st.bathDoorOpen !== this.prevBathDoor) this.bathDoor(st.bathDoorOpen);
+    if (st.fridgeOpen !== this.prevFridge) this.fridgeDoor(st.fridgeOpen);
+    this.prevFridge = st.fridgeOpen;
     this.prevBathDoor = st.bathDoorOpen;
     if (st.lightsOn !== this.prevLights) this.switchClick();
     if (st.lying !== this.prevLying) this.rustle();
@@ -346,11 +377,66 @@ export class GameAudio {
   }
 
   flush() {
+    if (!this.#ready) return;
     const { ctx, direct: out, white, brown } = this;
     S.noiseHit(ctx, out, white, { freq: 2500, q: 3, peak: 0.1, decay: 0.03 }); // button
     S.noiseHit(ctx, out, white, { freq: 900, q: 0.8, peak: 0.3, attack: 0.08, decay: 1.4, delay: 0.1, sweepTo: 400 });
     S.noiseHit(ctx, out, brown, { type: 'lowpass', freq: 500, peak: 0.4, attack: 0.1, decay: 1.2, delay: 0.1 });
     S.toneHit(ctx, out, { type: 'triangle', freq: 180, freqEnd: 90, peak: 0.05, attack: 0.05, decay: 0.6, delay: 1.0 }); // gurgle
+  }
+
+  // Seal letting go on open, soft thump on close
+  fridgeDoor(opening) {
+    const { ctx, direct: out, white } = this;
+    if (opening) {
+      S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 700, peak: 0.18, attack: 0.01, decay: 0.12 });
+    } else {
+      S.toneHit(ctx, out, { freq: 110, freqEnd: 70, peak: 0.25, decay: 0.1, delay: 0.25 });
+      S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 500, peak: 0.15, decay: 0.08, delay: 0.25 });
+    }
+  }
+
+  // Bites and chewing
+  chew() {
+    if (!this.#ready) return;
+    const { ctx, direct: out, white } = this;
+    for (let i = 0; i < 4; i++) {
+      S.noiseHit(ctx, out, white, { freq: 900 + Math.random() * 600, q: 1.5, peak: 0.12, attack: 0.01, decay: 0.07, delay: i * 0.13 });
+    }
+  }
+
+  // Register bell and the cash drawer
+  kaching() {
+    if (!this.#ready) return;
+    const { ctx, direct: out, white } = this;
+    S.toneHit(ctx, out, { freq: 1320, peak: 0.12, decay: 0.5 });
+    S.toneHit(ctx, out, { freq: 1760, peak: 0.1, decay: 0.6, delay: 0.08 });
+    S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 1500, peak: 0.12, decay: 0.15, delay: 0.15 });
+  }
+
+  // Two swallows
+  gulp() {
+    if (!this.#ready) return;
+    const { ctx, direct: out, white } = this;
+    for (const delay of [0, 0.22]) {
+      S.toneHit(ctx, out, { freq: 260, freqEnd: 140, peak: 0.25, attack: 0.01, decay: 0.12, delay });
+      S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 600, peak: 0.08, decay: 0.08, delay });
+    }
+  }
+
+  // Hard plastic bottle set down on something
+  tap() {
+    if (!this.#ready) return;
+    const { ctx, direct: out, white } = this;
+    S.toneHit(ctx, out, { type: 'triangle', freq: 820, freqEnd: 560, peak: 0.12, decay: 0.05 });
+    S.noiseHit(ctx, out, white, { freq: 2000, q: 2, peak: 0.12, decay: 0.03 });
+  }
+
+  pickup() {
+    if (!this.#ready) return;
+    const { ctx, direct: out, white } = this;
+    S.noiseHit(ctx, out, white, { type: 'highpass', freq: 2500, peak: 0.06, attack: 0.02, decay: 0.08 });
+    S.toneHit(ctx, out, { type: 'triangle', freq: 600, freqEnd: 760, peak: 0.04, decay: 0.05 });
   }
 
   // Bedding when lying down or getting up
@@ -371,7 +457,7 @@ export class GameAudio {
       S.toneHit(ctx, out, { freq: 95 * p, freqEnd: 60, peak: 0.3 * k, decay: 0.08 });
       S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 800 * p, peak: 0.12 * k, decay: 0.05 });
       S.toneHit(ctx, out, { type: 'triangle', freq: 420 * p, peak: 0.025 * k, decay: 0.12 }); // floor ring
-    } else if (surface === 'asphalt') {
+    } else if (surface === 'asphalt' || surface === 'tile') {
       S.noiseHit(ctx, out, white, { freq: 2500 * p, q: 1, peak: 0.12 * k, decay: 0.04 });
       S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 400 * p, peak: 0.18 * k, decay: 0.06 });
     } else {

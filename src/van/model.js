@@ -154,6 +154,15 @@ export const LAYOUT = {
   showerValve: BUILD.showerValve,
   toilet: BUILD.toilet,
   lightSwitch: BUILD.lightSwitch,
+  faucetTip: BUILD.faucetTip,
+  burner: BUILD.burner,
+  // Bottle holders (base of the bottle). The dash one sits beside the touchscreen.
+  holders: [
+    { id: 'dash', label: 'dash holder', at: new THREE.Vector3(-0.28, 1.348, 1.4), mount: 'dash' },
+    ...BUILD.holders,
+    // Inside the fridge: takes any item, only reachable while the door is open
+    ...BUILD.fridgeSlots.map((at, i) => ({ id: `fridge${i}`, label: 'fridge', at, mount: 'none', accepts: 'any', fridge: true })),
+  ],
   bedFront: BUILD.bedFront,
   bedStand: BUILD.bedStand,
   bedHead: BUILD.bedHead,

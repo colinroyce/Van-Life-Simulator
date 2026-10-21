@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { VAN } from './van/model.js';
 
 const CHASE_OFFSET = new THREE.Vector3(0, 3.4, -8.5);
+const COCKPIT_PITCH = -0.12; // resting head tilt
+const LOOK_SENSITIVITY = 0.0022;
+const LOOK_LIMITS = { yaw: 2.3, pitchDown: -0.9, pitchUp: 0.7 };
 
 function wrapAngle(a) {
   return Math.atan2(Math.sin(a), Math.cos(a));
@@ -16,8 +19,9 @@ export class CameraRig {
 
     this.cockpit = new THREE.PerspectiveCamera(72, aspect, 0.03, 3000);
     this.cockpit.position.copy(VAN.eye);
-    this.cockpit.rotation.set(-0.12, Math.PI, 0, 'YXZ');
+    this.cockpit.rotation.set(COCKPIT_PITCH, Math.PI, 0, 'YXZ');
     van.body.add(this.cockpit);
+    this.look = { yaw: 0, pitch: 0, idle: 0 }; // head swivel in the driver's seat
 
     this.mode = 'chase';
   }
@@ -29,6 +33,34 @@ export class CameraRig {
   toggle() {
     this.mode = this.mode === 'chase' ? 'cockpit' : 'chase';
     return this.mode;
+  }
+
+  resetLook() {
+    Object.assign(this.look, { yaw: 0, pitch: 0, idle: 0 });
+    this.#applyLook();
+  }
+
+  // Mouse turns the driver's head; it drifts back to the road when you stop looking around
+  // while the van is moving.
+  lookAround(mouse, dt, speed) {
+    const L = this.look;
+    if (mouse.x || mouse.y) {
+      L.yaw = THREE.MathUtils.clamp(L.yaw - mouse.x * LOOK_SENSITIVITY, -LOOK_LIMITS.yaw, LOOK_LIMITS.yaw);
+      L.pitch = THREE.MathUtils.clamp(L.pitch - mouse.y * LOOK_SENSITIVITY, LOOK_LIMITS.pitchDown, LOOK_LIMITS.pitchUp);
+      L.idle = 0;
+    } else {
+      L.idle += dt;
+    }
+    if (L.idle > 1.2 && Math.abs(speed) > 3) {
+      const k = 1 - Math.exp(-2.5 * dt);
+      L.yaw -= L.yaw * k;
+      L.pitch -= L.pitch * k;
+    }
+    this.#applyLook();
+  }
+
+  #applyLook() {
+    this.cockpit.rotation.set(COCKPIT_PITCH + this.look.pitch, Math.PI + this.look.yaw, 0, 'YXZ');
   }
 
   snap(sim) {

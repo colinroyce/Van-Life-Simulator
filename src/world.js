@@ -1,10 +1,14 @@
 import * as THREE from 'three';
 import { HULL } from './van/physics.js';
+import { ConvenienceStore } from './places/store.js';
 
 export const BOUNDS = 190;
 export const SPAWN = { position: new THREE.Vector3(0, 0, -60), yaw: 0 };
 
 const PAD = { halfX: 30, halfZ: 80 };
+// Paved lot off the east side of the pad, with the convenience store on it
+const LOT = { x0: 30, x1: 66, z0: 18, z1: 62 };
+const STORE = { x: 57, z: 40, facing: -Math.PI / 2 }; // front faces the pad (-X)
 
 const mat = (color, opts = {}) =>
   new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, ...opts });
@@ -98,6 +102,26 @@ function buildPad() {
   return g;
 }
 
+function buildLot() {
+  const g = new THREE.Group();
+  const w = LOT.x1 - LOT.x0;
+  const d = LOT.z1 - LOT.z0;
+  const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(w, d), mat(0x4a4d52));
+  asphalt.rotation.x = -Math.PI / 2;
+  asphalt.position.set((LOT.x0 + LOT.x1) / 2, 0.012, (LOT.z0 + LOT.z1) / 2);
+  asphalt.receiveShadow = true;
+  g.add(asphalt);
+  // Parking spaces along the front of the store
+  const paint = mat(0xf3f0e6);
+  for (let z = 33; z <= 47; z += 3) {
+    const s = new THREE.Mesh(new THREE.PlaneGeometry(5, 0.15), paint);
+    s.rotation.x = -Math.PI / 2;
+    s.position.set(47.5, 0.02, z);
+    g.add(s);
+  }
+  return g;
+}
+
 function buildPine(rand) {
   const g = new THREE.Group();
   const h = 5 + rand() * 5;
@@ -179,9 +203,19 @@ export class World {
     this.cones = [];
     const rand = rng(7);
 
-    scene.add(buildSky(), buildGround(rand), buildPad(), buildMountains(rand));
+    const ground = buildGround(rand);
+    const pad = buildPad();
+    const lot = buildLot();
+    scene.add(buildSky(), ground, pad, lot, buildMountains(rand));
 
-    const onPad = (x, z, margin) => Math.abs(x) < PAD.halfX + margin && Math.abs(z) < PAD.halfZ + margin;
+    this.store = new ConvenienceStore();
+    this.store.place(scene, STORE.x, STORE.z, STORE.facing);
+    this.obstacles.push(...this.store.vanObstacles());
+    this.surfaces = [ground, pad, lot, this.store.group]; // things you can aim at and set items down on
+
+    const onLot = (x, z, margin) => x > LOT.x0 - margin && x < LOT.x1 + margin && z > LOT.z0 - margin && z < LOT.z1 + margin;
+    const onPad = (x, z, margin) =>
+      (Math.abs(x) < PAD.halfX + margin && Math.abs(z) < PAD.halfZ + margin) || onLot(x, z, margin);
     const place = (mesh, x, z, r) => {
       mesh.position.x = x;
       mesh.position.z = z;
@@ -236,7 +270,14 @@ export class World {
 
   // 'asphalt' on the pad, 'grass' everywhere else.
   surfaceAt(x, z) {
-    return Math.abs(x) < PAD.halfX && Math.abs(z) < PAD.halfZ ? 'asphalt' : 'grass';
+    if (this.store.contains(new THREE.Vector3(x, 0, z))) return 'tile';
+    const onLot = x > LOT.x0 && x < LOT.x1 && z > LOT.z0 && z < LOT.z1;
+    return onLot || (Math.abs(x) < PAD.halfX && Math.abs(z) < PAD.halfZ) ? 'asphalt' : 'grass';
+  }
+
+  // Wall segments for walking ([[x, z], [x, z]], world space).
+  walls() {
+    return this.store.walls();
   }
 
   // Cones get knocked around by the van but never block it.
