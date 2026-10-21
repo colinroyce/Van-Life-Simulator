@@ -14,16 +14,17 @@ export class CameraRig {
   constructor(van) {
     const aspect = window.innerWidth / window.innerHeight;
 
-    this.chase = new THREE.PerspectiveCamera(62, aspect, 0.1, 3000);
+    this.chase = new THREE.PerspectiveCamera(62, aspect, 0.1, 9000);
     this.chaseYaw = 0;
 
-    this.cockpit = new THREE.PerspectiveCamera(72, aspect, 0.03, 3000);
+    this.cockpit = new THREE.PerspectiveCamera(72, aspect, 0.03, 9000);
     this.cockpit.position.copy(VAN.eye);
     this.cockpit.rotation.set(COCKPIT_PITCH, Math.PI, 0, 'YXZ');
     van.body.add(this.cockpit);
     this.look = { yaw: 0, pitch: 0, idle: 0 }; // head swivel in the driver's seat
 
     this.mode = 'chase';
+    this.ground = () => -Infinity; // keeps the chase camera above hillsides
   }
 
   get active() {
@@ -91,6 +92,8 @@ export class CameraRig {
     const offset = CHASE_OFFSET.clone().applyAxisAngle(THREE.Object3D.DEFAULT_UP, this.chaseYaw);
     const target = sim.position.clone().add(offset);
     this.chase.position.lerp(target, t);
+    const floor = this.ground(this.chase.position.x, this.chase.position.z) + 1.2;
+    if (this.chase.position.y < floor) this.chase.position.y = floor;
 
     const look = sim.position.clone();
     look.y += 1.6;

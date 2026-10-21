@@ -198,9 +198,12 @@ function buildCone() {
   return g;
 }
 
+// The original flat test pad (load with ?sandbox).
 export class World {
   constructor(scene) {
     this.scene = scene;
+    this.spawn = SPAWN;
+    this.route = null;
     this.obstacles = []; // solid {x, z, r}
     this.cones = [];
     const rand = rng(7);
@@ -272,6 +275,44 @@ export class World {
       c.down = false;
       this.#syncCone(c);
     });
+  }
+
+  groundHeight() {
+    return 0;
+  }
+
+  obstaclesNear() {
+    return this.obstacles;
+  }
+
+  frame() {
+    return null; // fixed weather
+  }
+
+  locate() {
+    return null;
+  }
+
+  resetPose() {
+    return SPAWN;
+  }
+
+  // Invisible walls at the edge of the sandbox. Returns the impact speed.
+  constrainVan(sim) {
+    let impact = 0;
+    for (const axis of ['x', 'z']) {
+      if (Math.abs(sim.position[axis]) > BOUNDS) {
+        sim.position[axis] = Math.sign(sim.position[axis]) * BOUNDS;
+        impact = Math.max(impact, Math.abs(sim.speed));
+        sim.speed *= -0.2;
+      }
+    }
+    return impact;
+  }
+
+  constrainWalker(p) {
+    p.x = Math.min(Math.max(p.x, -BOUNDS), BOUNDS);
+    p.z = Math.min(Math.max(p.z, -BOUNDS), BOUNDS);
   }
 
   // 'asphalt' on the pad, 'grass' everywhere else.

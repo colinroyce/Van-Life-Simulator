@@ -1,7 +1,9 @@
 import * as THREE from 'three';
 import { VanModel } from './van/model.js';
 import { VanSim } from './van/physics.js';
-import { World, BOUNDS, SPAWN, createEnvironment } from './world.js';
+import { World, createEnvironment } from './world.js';
+import { RoadTripWorld } from './map/roadTrip.js';
+import { Gps } from './ui/gps.js';
 import { CameraRig } from './cameras.js';
 import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey, onLockedClick, onScroll } from './input.js';
 import { Player } from './player.js';
@@ -27,7 +29,8 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xd8ecf5, 120, 650);
 
-scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x5f7f45, 1.3));
+const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x5f7f45, 1.3);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
 const SUN_DIR = new THREE.Vector3(40, 70, 25);
 sun.castShadow = true;
@@ -37,12 +40,17 @@ sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
-const world = new World(scene);
+// The road trip by default; ?sandbox loads the flat test pad.
+const sandbox = new URLSearchParams(location.search).has('sandbox');
+const world = sandbox ? new World(scene) : new RoadTripWorld(scene);
 const van = new VanModel();
 van.setEnvironment(createEnvironment(renderer));
 scene.add(van.root);
 const sim = new VanSim();
+sim.ground = (x, z) => world.groundHeight(x, z);
 const cameras = new CameraRig(van);
+cameras.ground = sim.ground;
+const gps = world.route && new Gps(world.route, world.destination, [{ x: 42, z: 40, icon: '⛽' }]);
 const player = new Player(window.innerWidth / window.innerHeight);
 const audio = new GameAudio();
 const needs = new Needs();
@@ -64,10 +72,10 @@ items.extraAction = (fixture) => {
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, get mode() { return mode; } };
 
-function reset() {
-  sim.reset(SPAWN.position, SPAWN.yaw);
+function reset(pose = world.spawn) {
+  sim.reset(pose.position, pose.yaw);
   world.resetCones();
   van.sync(sim);
   cameras.snap(sim);
@@ -262,7 +270,7 @@ onKey('KeyG', () => {
 });
 for (let i = 0; i < hotbar.slots.length; i++) onKey(`Digit${i + 1}`, () => mode === 'walk' && hotbar.select(i));
 onKey('KeyR', () => {
-  if (mode === 'drive') return reset();
+  if (mode === 'drive') return reset(world.resetPose(sim.position));
   if (!busy()) items.actions().r?.run();
 });
 onScroll((dir) => {
@@ -317,6 +325,18 @@ function showConsequences() {
   hygieneThoughts.update(needs.values.hygiene);
 }
 
+// Weather for where you are on the trip (the sandbox keeps its fixed sky).
+function applyAtmosphere(a) {
+  if (!a) return;
+  scene.fog.color.copy(a.horizon);
+  scene.fog.near = a.fogNear;
+  scene.fog.far = a.fogFar;
+  hemi.color.copy(a.hemiSky);
+  hemi.groundColor.copy(a.hemiGround);
+  hemi.intensity = a.hemi;
+  sun.intensity = a.sun;
+}
+
 // --- loop ---
 const frameClock = new THREE.Clock();
 const STEP = 1 / 120;
@@ -343,7 +363,7 @@ function tick(dt) {
     acc += dt;
     while (acc >= STEP) {
       sim.update(STEP, engineRunning ? driveInput : coasting);
-      impact = Math.max(impact, sim.collide(world.obstacles, BOUNDS));
+      impact = Math.max(impact, sim.collide(world.obstaclesNear(sim.position.x, sim.position.z)), world.constrainVan(sim));
       coneHit = Math.max(coneHit, world.update(STEP, sim));
       acc -= STEP;
     }
@@ -375,7 +395,7 @@ function tick(dt) {
     van.setFuelDoorHighlight(false);
   } else {
     const still = { forward: 0, strafe: 0, turn: 0, run: false };
-    player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world, BOUNDS);
+    player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world);
     camera = player.camera;
     focus = player.position;
     items.aim(player.camera);
@@ -441,6 +461,15 @@ function tick(dt) {
 
   sun.target.position.copy(focus);
   sun.position.copy(focus).add(SUN_DIR);
+  applyAtmosphere(world.frame(focus, camera));
+
+  // The GPS lives on the dash touchscreen: on with the engine, drawn while you can see it
+  if (gps && engineRunning) {
+    van.setScreen(gps.material);
+    if (cameras.mode === 'cockpit') gps.update(dt, sim, world.locate(sim.position.x, sim.position.z));
+  } else {
+    van.setScreen(null);
+  }
 
   renderer.render(scene, camera);
 }

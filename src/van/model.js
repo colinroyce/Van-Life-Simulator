@@ -649,6 +649,12 @@ function buildDashboard() {
   screen.rotation.x = 0.2;
   screen.add(box(0.36, 0.22, 0.03, DASH_DARK));
   screen.add(box(0.33, 0.19, 0.005, SCREEN, 0, 0, -0.016));
+  // Display surface (the GPS draws on it when the engine's running)
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.18), SCREEN);
+  display.name = 'gpsDisplay';
+  display.position.z = -0.0195;
+  display.rotation.y = Math.PI;
+  screen.add(display);
   g.add(screen);
 
   // Round air vents on the dash face
@@ -820,6 +826,13 @@ export class VanModel {
 
     this.#buildSteering();
     this.setOccupant('chase');
+    this.screen = this.body.getObjectByName('gpsDisplay');
+    this.screenOff = this.screen.material;
+  }
+
+  // Show a texture on the center touchscreen, or blank it (null).
+  setScreen(material) {
+    this.screen.material = material ?? this.screenOff;
   }
 
   // Reflections for paint, glass and chrome.
@@ -952,7 +965,7 @@ export class VanModel {
   // Applies simulation state to the scene graph.
   sync(sim) {
     this.root.position.copy(sim.position);
-    this.root.rotation.y = sim.yaw;
+    this.root.rotation.set(-sim.groundPitch, sim.yaw, sim.groundRoll, 'YXZ');
     this.body.rotation.set(sim.pitch, 0, sim.roll, 'YXZ');
 
     for (const w of this.wheels) {
