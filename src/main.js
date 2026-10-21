@@ -3,9 +3,16 @@ import { VanModel } from './van/model.js';
 import { VanSim } from './van/physics.js';
 import { World, BOUNDS, SPAWN, createEnvironment } from './world.js';
 import { CameraRig } from './cameras.js';
-import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey } from './input.js';
+import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey, onLockedClick, onScroll } from './input.js';
 import { Player } from './player.js';
 import { GameAudio } from './audio/sound.js';
+import { Needs, NEEDS, needColor } from './needs.js';
+import { GameClock, GAME_MINUTES_PER_SECOND } from './clock.js';
+import { SleepWheel } from './ui/sleepWheel.js';
+import { createFuelGauge } from './ui/fuelGauge.js';
+import { fade, fadeThrough, setCaption } from './ui/fade.js';
+import { Hotbar } from './items/hotbar.js';
+import { ItemSystem, describeItem } from './items/items.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -36,11 +43,17 @@ const sim = new VanSim();
 const cameras = new CameraRig(van);
 const player = new Player(window.innerWidth / window.innerHeight);
 const audio = new GameAudio();
+const needs = new Needs();
+const clock = new GameClock(8);
+const sleepWheel = new SleepWheel(document.getElementById('sleep-wheel'));
+scene.add(player.camera); // so things held in front of it render
+const hotbar = new Hotbar(document.getElementById('hotbar'), describeItem, 6);
+const items = new ItemSystem({ scene, van, player, hotbar, needs, world, audio, notify: (t) => flashCamLabel(t) });
 
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, get mode() { return mode; } };
 
 function reset() {
   sim.reset(SPAWN.position, SPAWN.yaw);
@@ -61,8 +74,35 @@ const hud = {
   cam: document.getElementById('cam-label'),
   prompt: document.getElementById('prompt'),
   crosshair: document.getElementById('crosshair'),
+  hotbar: document.getElementById('hotbar'),
+  heldHint: document.getElementById('held-hint'),
   lookHint: document.getElementById('look-hint'),
 };
+// One bar per scarcity meter, bottom left (fuel has its own gauge)
+const needBars = NEEDS.filter((n) => !n.gauge).map((n) => {
+  const row = document.createElement('div');
+  row.className = 'need';
+  row.innerHTML = `<span>${n.label}</span><div class="need-track"><div class="need-fill"></div></div><span class="need-value"></span>`;
+  document.getElementById('needs').appendChild(row);
+  return { key: n.key, fill: row.querySelector('.need-fill'), value: row.querySelector('.need-value') };
+});
+
+const moneyLabel = document.getElementById('money');
+const clockLabel = document.getElementById('clock');
+const setFuelGauge = createFuelGauge(document.getElementById('fuel-gauge'));
+
+function renderNeeds() {
+  moneyLabel.textContent = `$${needs.money.toLocaleString('en-US')}`;
+  clockLabel.textContent = clock.label();
+  setFuelGauge(needs.values.fuel);
+  for (const bar of needBars) {
+    const v = needs.values[bar.key];
+    bar.fill.style.width = `${v}%`;
+    bar.fill.style.background = needColor(v);
+    bar.value.textContent = `${Math.ceil(v)}%`;
+  }
+}
+
 let camLabelTimer;
 function flashCamLabel(text) {
   hud.cam.textContent = text;
@@ -75,7 +115,7 @@ function setMode(next) {
   mode = next;
   const walking = mode === 'walk';
   hud.gauge.hidden = walking;
-  hud.crosshair.hidden = !walking;
+  hud.hotbar.hidden = !walking;
   hud.helpDrive.hidden = walking;
   hud.helpWalk.hidden = !walking;
   if (!walking && isPointerLocked()) document.exitPointerLock();
@@ -93,38 +133,110 @@ function getUp() {
 }
 
 function sitDown() {
+  cameras.resetLook();
   van.setDoorOpen(false);
   van.setOccupant(cameras.mode);
   setMode('drive');
 }
 
+const busy = () => fade.active || sleepWheel.isOpen;
+
+function openSleepWheel() {
+  if (isPointerLocked()) document.exitPointerLock();
+  sleepWheel.open(clock.minutes, (h) => needs.previewSleep(h), needs.values);
+}
+
+// Fade out, let the hours tick by on the clock, wake up with the meters updated.
+function sleep(hours) {
+  sleepWheel.close();
+  const from = clock.minutes;
+  fadeThrough({
+    out: 900,
+    back: 1100,
+    text: `You slept ${hours} hour${hours === 1 ? '' : 's'}`,
+    onBlack: async () => {
+      const steps = 40;
+      for (let i = 1; i <= steps; i++) {
+        clock.minutes = from + (hours * 60 * i) / steps;
+        setCaption(`Zzz…  ${clock.label()}`);
+        await new Promise((r) => setTimeout(r, 40));
+      }
+      needs.sleep(hours);
+    },
+  });
+}
+
+function takeShower() {
+  van.setShower(true);
+  fadeThrough({
+    out: 900,
+    hold: 1400,
+    text: "You're squeaky clean!",
+    onBlack: () => {
+      clock.advance(15);
+      needs.shower();
+      van.setShower(false);
+    },
+  });
+}
+
 onKey('KeyE', () => {
-  if (mode === 'drive') return getUp();
+  if (fade.active) return;
+  if (sleepWheel.isOpen) return sleep(sleepWheel.hours);
+  if (mode === 'drive') {
+    const drink = cameras.mode === 'cockpit' && items.cockpitAction(cameras.cockpit);
+    return drink ? drink.run() : getUp();
+  }
+  const itemAction = items.actions().e;
+  if (itemAction) return itemAction.run();
   const action = player.interaction(van)?.action;
   if (action === 'drive') sitDown();
   if (action === 'door') van.setDoorOpen(!van.doorOpen);
   if (action === 'lights') van.setLights(!van.lightsOn);
   if (action === 'bathDoor') van.setBathDoorOpen(!van.bathDoorOpen);
-  if (action === 'shower') van.setShower(!van.showerOn);
+  if (action === 'shower') takeShower();
   if (action === 'flush') audio.flush();
   if (action === 'lie') player.lieDown(van);
-  if (action === 'getup') player.getOutOfBed(van);
+  if (action === 'sleep') openSleepWheel();
+});
+onKey('KeyQ', () => {
+  if (!busy() && player.lying) player.getOutOfBed(van);
+});
+onKey('Escape', () => sleepWheel.isOpen && sleepWheel.close());
+for (const [code, delta] of [['KeyA', -1], ['ArrowLeft', -1], ['KeyD', 1], ['ArrowRight', 1]]) {
+  onKey(code, () => sleepWheel.isOpen && sleepWheel.adjust(delta));
+}
+onKey('KeyG', () => {
+  if (mode === 'walk' && !busy()) items.actions().g?.run();
+});
+for (let i = 0; i < hotbar.slots.length; i++) onKey(`Digit${i + 1}`, () => mode === 'walk' && hotbar.select(i));
+onKey('KeyR', () => {
+  if (mode === 'drive') return reset();
+  if (!busy()) items.actions().r?.run();
+});
+onScroll((dir) => {
+  if (mode === 'walk' && !busy()) hotbar.select(hotbar.selected + dir);
+});
+onLockedClick(() => {
+  if (mode === 'walk' && !busy()) items.useHeld();
 });
 onKey('KeyC', () => {
   if (mode !== 'drive') return;
   const cockpit = cameras.toggle() === 'cockpit';
+  if (!cockpit && isPointerLocked()) document.exitPointerLock();
   van.setOccupant(cameras.mode);
   flashCamLabel(cockpit ? 'Driver view' : 'Chase camera');
 });
-onKey('KeyR', () => mode === 'drive' && reset());
 onKey('Slash', () => (hud.help.hidden = !hud.help.hidden));
 onKey('KeyM', () => flashCamLabel(audio.toggleMute() ? 'Sound off' : 'Sound on'));
 
 // Audio can only start after the player interacts with the page.
 for (const type of ['keydown', 'pointerdown']) window.addEventListener(type, () => audio.unlock());
 
+// Click to capture the mouse: on foot, or to look around from the driver's seat.
 renderer.domElement.addEventListener('click', () => {
-  if (mode === 'walk' && !isPointerLocked()) renderer.domElement.requestPointerLock();
+  const canLook = mode === 'walk' || cameras.mode === 'cockpit';
+  if (canLook && !isPointerLocked()) renderer.domElement.requestPointerLock();
 });
 
 window.addEventListener('resize', () => {
@@ -136,7 +248,7 @@ window.addEventListener('resize', () => {
 });
 
 // --- loop ---
-const clock = new THREE.Clock();
+const frameClock = new THREE.Clock();
 const STEP = 1 / 120;
 let acc = 0;
 
@@ -163,24 +275,51 @@ function tick(dt) {
   let focus;
   if (mode === 'drive') {
     cameras.update(dt, sim);
+    const cockpit = cameras.mode === 'cockpit';
+    if (cockpit) cameras.lookAround(isPointerLocked() ? mouse : { x: 0, y: 0 }, dt, sim.speed);
     camera = cameras.active;
     focus = sim.position;
     hud.speed.textContent = Math.round(Math.abs(sim.speed) * 2.23694);
     hud.gear.textContent = sim.gear;
-    hud.prompt.hidden = Math.abs(sim.speed) > 0.5;
-    hud.prompt.innerHTML = '<kbd>E</kbd> Get up';
+    const drink = cockpit && items.cockpitAction(cameras.cockpit);
+    const stopped = Math.abs(sim.speed) <= 0.5;
+    hud.prompt.hidden = !drink && !stopped;
+    hud.prompt.innerHTML = drink ? `<kbd>E</kbd> ${drink.label}` : '<kbd>E</kbd> Get up';
+    hud.crosshair.hidden = !(cockpit && isPointerLocked());
+    hud.heldHint.textContent = '';
     hud.lookHint.hidden = true;
+    items.update(dt, false);
   } else {
-    player.update(dt, readWalkInput(), mouse, van, world, BOUNDS);
+    const still = { forward: 0, strafe: 0, turn: 0, run: false };
+    player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world, BOUNDS);
     camera = player.camera;
     focus = player.position;
-    const it = player.interaction(van);
-    hud.prompt.hidden = !it;
-    if (it) hud.prompt.innerHTML = `<kbd>E</kbd> ${it.label}`;
-    hud.lookHint.hidden = isPointerLocked();
+    items.aim(player.camera);
+    items.update(dt, true);
+    const { e: itemAction, g: placeAction, r: combineAction } = items.actions();
+    const it = itemAction ?? player.interaction(van);
+    const parts = [];
+    if (it) parts.push(`<kbd>E</kbd> ${it.label}`);
+    if (it?.alt) parts.push(`<kbd>${it.alt.key}</kbd> ${it.alt.label}`);
+    if (placeAction) parts.push(`<kbd>G</kbd> ${placeAction.label}`);
+    if (combineAction) parts.push(`<kbd>R</kbd> ${combineAction.label}`);
+    hud.prompt.hidden = !parts.length || busy();
+    hud.prompt.innerHTML = parts.join(' &nbsp; ');
+    const held = hotbar.held;
+    hud.heldHint.textContent = held ? [describeItem(held).name, items.useHint].filter(Boolean).join(' · ') : '';
+    hud.crosshair.hidden = false;
+    hud.lookHint.hidden = isPointerLocked() || busy();
   }
 
   const walking = mode === 'walk';
+  world.store.update(dt, walking ? player.position : sim.position, items.hasUnpaid, flashCamLabel);
+  if (!sleepWheel.isOpen) {
+    const gameMinutes = dt * GAME_MINUTES_PER_SECOND;
+    clock.advance(gameMinutes);
+    needs.update(gameMinutes / 60, { engineOn: !walking, speed: sim.speed });
+  }
+  renderNeeds();
+
   audio.update(dt, {
     listener: walking ? (player.inside ? 'inside' : 'outside') : cameras.mode,
     engineOn: !walking,
@@ -197,6 +336,10 @@ function tick(dt) {
     lightsOn: van.lightsOn,
     showerOn: van.showerOn,
     bathDoorOpen: van.bathDoorOpen,
+    faucetOn: items.faucetRunning,
+    sizzle: items.stove.sizzle,
+    burning: items.stove.burning,
+    fridgeOpen: van.buildout.fridgeOpen,
     lying: player.lying,
     walking,
     inside: player.inside,
@@ -212,7 +355,7 @@ function tick(dt) {
 }
 
 function frame() {
-  tick(Math.min(clock.getDelta(), 0.1));
+  tick(Math.min(frameClock.getDelta(), 0.1));
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
