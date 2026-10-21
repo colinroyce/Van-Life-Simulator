@@ -234,10 +234,17 @@ export class World {
     });
   }
 
+  // 'asphalt' on the pad, 'grass' everywhere else.
+  surfaceAt(x, z) {
+    return Math.abs(x) < PAD.halfX && Math.abs(z) < PAD.halfZ ? 'asphalt' : 'grass';
+  }
+
   // Cones get knocked around by the van but never block it.
+  // Returns the hardest cone hit this step (closing speed, m/s).
   update(dt, sim) {
     const fwd = sim.forward;
     const vel = sim.velocity;
+    let hardestHit = 0;
     for (const c of this.cones) {
       for (const [offset, radius] of HULL) {
         const dx = c.x - (sim.position.x + fwd.x * offset);
@@ -247,6 +254,7 @@ export class World {
         if (d2 > minDist * minDist) continue;
         const d = Math.sqrt(d2) || 0.001;
         const kick = 1.5 + Math.abs(sim.speed) * 0.3;
+        hardestHit = Math.max(hardestHit, Math.hypot(vel.x - c.vx, vel.z - c.vz));
         c.vx = vel.x * 1.1 + (dx / d) * kick;
         c.vz = vel.z * 1.1 + (dz / d) * kick;
         c.x += (dx / d) * (minDist - d);
@@ -264,6 +272,7 @@ export class World {
       if (c.down) c.tilt = Math.min(c.tilt + dt * 9, Math.PI / 2 - 0.25);
       this.#syncCone(c, dt);
     }
+    return hardestHit;
   }
 
   #syncCone(c, dt = 0) {

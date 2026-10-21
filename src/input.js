@@ -25,6 +25,7 @@ export function readDriveInput() {
     // +1 = left, -1 = right
     steer: (any('KeyA', 'ArrowLeft') ? 1 : 0) - (any('KeyD', 'ArrowRight') ? 1 : 0),
     handbrake: any('Space'),
+    horn: any('KeyH'),
   };
 }
 

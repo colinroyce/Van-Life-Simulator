@@ -5,6 +5,7 @@ import { World, BOUNDS, SPAWN, createEnvironment } from './world.js';
 import { CameraRig } from './cameras.js';
 import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey } from './input.js';
 import { Player } from './player.js';
+import { GameAudio } from './audio/sound.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -34,11 +35,12 @@ scene.add(van.root);
 const sim = new VanSim();
 const cameras = new CameraRig(van);
 const player = new Player(window.innerWidth / window.innerHeight);
+const audio = new GameAudio();
 
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, van, sim, cameras, player, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, get mode() { return mode; } };
 
 function reset() {
   sim.reset(SPAWN.position, SPAWN.yaw);
@@ -109,7 +111,11 @@ onKey('KeyC', () => {
   flashCamLabel(cockpit ? 'Driver view' : 'Chase camera');
 });
 onKey('KeyR', () => mode === 'drive' && reset());
-onKey('KeyH', () => (hud.help.hidden = !hud.help.hidden));
+onKey('Slash', () => (hud.help.hidden = !hud.help.hidden));
+onKey('KeyM', () => flashCamLabel(audio.toggleMute() ? 'Sound off' : 'Sound on'));
+
+// Audio can only start after the player interacts with the page.
+for (const type of ['keydown', 'pointerdown']) window.addEventListener(type, () => audio.unlock());
 
 renderer.domElement.addEventListener('click', () => {
   if (mode === 'walk' && !isPointerLocked()) renderer.domElement.requestPointerLock();
@@ -130,14 +136,16 @@ let acc = 0;
 
 function tick(dt) {
   const mouse = takeMouseDelta();
+  const driveInput = readDriveInput();
+  let impact = 0;
+  let coneHit = 0;
 
   if (mode === 'drive') {
     acc += dt;
-    const input = readDriveInput();
     while (acc >= STEP) {
-      sim.update(STEP, input);
-      sim.collide(world.obstacles, BOUNDS);
-      world.update(STEP, sim);
+      sim.update(STEP, driveInput);
+      impact = Math.max(impact, sim.collide(world.obstacles, BOUNDS));
+      coneHit = Math.max(coneHit, world.update(STEP, sim));
       acc -= STEP;
     }
   }
@@ -165,6 +173,27 @@ function tick(dt) {
     if (it) hud.prompt.innerHTML = `<kbd>E</kbd> ${it.label}`;
     hud.lookHint.hidden = isPointerLocked();
   }
+
+  const walking = mode === 'walk';
+  audio.update(dt, {
+    listener: walking ? (player.inside ? 'inside' : 'outside') : cameras.mode,
+    engineOn: !walking,
+    rpm: sim.rpm,
+    load: sim.load,
+    speed: sim.speed,
+    slip: sim.slip,
+    vanSurface: world.surfaceAt(sim.position.x, sim.position.z),
+    horn: !walking && driveInput.horn,
+    impact,
+    coneHit,
+    doorOpen: van.doorOpen,
+    doorT: van.doorT,
+    walking,
+    inside: player.inside,
+    moved: walking ? player.moved : 0,
+    running: player.running,
+    footSurface: player.inside ? 'van' : world.surfaceAt(player.position.x, player.position.z),
+  });
 
   sun.target.position.copy(focus);
   sun.position.copy(focus).add(SUN_DIR);

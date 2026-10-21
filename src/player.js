@@ -76,6 +76,8 @@ export class Player {
     this.eye = EYE;
     this.local = new THREE.Vector3(); // position in van space, updated each frame
     this.inside = true;
+    this.moved = 0; // meters walked last update (for footsteps)
+    this.running = false;
   }
 
   // Stand up between the front seats, facing the back of the van.
@@ -108,10 +110,14 @@ export class Player {
       mz /= len;
     }
     const speed = input.run ? RUN_SPEED : WALK_SPEED;
+    const startX = this.position.x;
+    const startZ = this.position.z;
     this.position.x += mx * speed * dt;
     this.position.z += mz * speed * dt;
 
     this.#collide(van, world, bounds);
+    this.moved = Math.hypot(this.position.x - startX, this.position.z - startZ);
+    this.running = input.run;
 
     const targetFloor = this.inside ? LAYOUT.floorY : 0;
     const targetEye = this.inside && this.local.z > LAYOUT.cabZ ? EYE_DUCK : EYE;

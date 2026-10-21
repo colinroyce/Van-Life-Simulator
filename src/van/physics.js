@@ -29,6 +29,12 @@ export const HULL = [
   [-2.1, 1.03],
 ];
 
+// Automatic gearbox, for engine sound: rpm per m/s of road speed in each gear.
+const GEAR_RATIOS = [330, 210, 145, 110, 88, 74];
+const REVERSE_RATIO = 300;
+const IDLE_RPM = 750;
+const REDLINE_RPM = 4200;
+
 function approach(value, target, rate) {
   return value < target ? Math.min(value + rate, target) : Math.max(value - rate, target);
 }
@@ -49,6 +55,11 @@ export class VanSim {
     this.rollVel = 0;
     this.pitch = 0;
     this.pitchVel = 0;
+    this.rpm = IDLE_RPM;
+    this.gearIndex = 0; // -1 reverse
+    this.load = 0; // 0..1 how hard the engine is pulling
+    this.slip = 0; // 0..1 tires sliding past grip
+    this.impact = 0; // strongest hit during the last collide(), m/s into the obstacle
   }
 
   get forward() {
@@ -96,7 +107,9 @@ export class VanSim {
 
     let yawRate = (this.speed * Math.tan(this.steer)) / T.wheelbase;
     const lat = this.speed * yawRate;
+    this.slip = 0;
     if (Math.abs(lat) > T.maxLateralAccel) {
+      this.slip = Math.min((Math.abs(lat) - T.maxLateralAccel) / T.maxLateralAccel, 1);
       yawRate = (Math.sign(yawRate) * T.maxLateralAccel) / Math.max(absV, 0.01);
       // scrub a little speed when pushing past grip
       this.speed = approach(this.speed, 0, 1.5 * dt);
@@ -112,6 +125,31 @@ export class VanSim {
     const latAccel = this.speed * yawRate;
     this.#spring('roll', latAccel * T.rollPerAccel, dt);
     this.#spring('pitch', -longAccel * T.pitchPerAccel, dt);
+
+    if (input.handbrake && absV > 3) this.slip = Math.max(this.slip, Math.min(absV / 15, 1));
+    this.#updateDrivetrain(dt, input);
+  }
+
+  #updateDrivetrain(dt, input) {
+    const v = Math.abs(this.speed);
+    const pulling = input.throttle && this.speed >= -0.5;
+    this.load += ((pulling ? 1 : 0) - this.load) * (1 - Math.exp(-6 * dt));
+
+    let target;
+    if (this.speed < -0.3) {
+      this.gearIndex = -1;
+      target = IDLE_RPM + v * REVERSE_RATIO;
+    } else {
+      this.gearIndex = Math.max(this.gearIndex, 0);
+      const upshiftAt = pulling ? 2700 : 1900;
+      while (this.gearIndex < GEAR_RATIOS.length - 1 && v * GEAR_RATIOS[this.gearIndex] > upshiftAt) this.gearIndex++;
+      while (this.gearIndex > 0 && v * GEAR_RATIOS[this.gearIndex] < 1100) this.gearIndex--;
+      target = Math.max(IDLE_RPM, v * GEAR_RATIOS[this.gearIndex]);
+      // torque converter lets the revs flare when pulling away
+      if (pulling && v < 3) target = Math.max(target, 1800);
+      if (input.handbrake && input.throttle) target = 3400; // revving in place
+    }
+    this.rpm += (Math.min(target, REDLINE_RPM) - this.rpm) * (1 - Math.exp(-8 * dt));
   }
 
   #spring(key, target, dt) {
@@ -122,9 +160,9 @@ export class VanSim {
     this[key] += this[velKey] * dt;
   }
 
-  // Push out of solid circles ({x, z, r}); returns true on contact.
+  // Push out of solid circles ({x, z, r}); returns the impact speed (m/s), 0 if no hit.
   collide(obstacles, bounds) {
-    let hit = false;
+    this.impact = 0;
     const fwd = this.forward;
     for (const [offset, radius] of HULL) {
       for (const o of obstacles) {
@@ -141,7 +179,6 @@ export class VanSim {
         this.position.x += nx * (minDist - d);
         this.position.z += nz * (minDist - d);
         this.#absorbImpact(nx, nz);
-        hit = true;
       }
     }
 
@@ -149,17 +186,18 @@ export class VanSim {
     for (const axis of ['x', 'z']) {
       if (Math.abs(this.position[axis]) > bounds) {
         this.position[axis] = Math.sign(this.position[axis]) * bounds;
+        this.impact = Math.max(this.impact, Math.abs(this.speed));
         this.speed *= -0.2;
-        hit = true;
       }
     }
-    return hit;
+    return this.impact;
   }
 
   #absorbImpact(nx, nz) {
     const fwd = this.forward;
     const into = -(fwd.x * nx + fwd.z * nz) * Math.sign(this.speed);
     if (into <= 0) return; // sliding away
+    this.impact = Math.max(this.impact, into * Math.abs(this.speed));
     if (into > 0.7) {
       this.speed *= -0.25; // near head-on: bounce back
     } else {
