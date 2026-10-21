@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { BUILD, buildBuildout } from './buildout.js';
+import { BUILD, Buildout } from './buildout.js';
+import { indoor, CAB_AMBIENT } from './indoor.js';
 
 // Modeled on a Sprinter 144" wheelbase high roof. Van faces +Z, driver on the left (+X). Meters.
 export const VAN = {
@@ -147,6 +148,11 @@ export const LAYOUT = {
     [-1.0, -0.7, -2.36, -1.3],
     ...BUILD.blocks,
   ],
+  walls: BUILD.walls,
+  inBath: BUILD.inBath,
+  bathDoor: BUILD.bathDoor,
+  showerValve: BUILD.showerValve,
+  toilet: BUILD.toilet,
   lightSwitch: BUILD.lightSwitch,
   bedFront: BUILD.bedFront,
   bedStand: BUILD.bedStand,
@@ -262,23 +268,24 @@ const TIRE = mat(0x1c1c1e, { roughness: 0.95 });
 const RIM = mat(0x3a3d41, { roughness: 0.45, metalness: 0.6 });
 
 // Interior
-const LINING = mat(0x4a4d53, { side: THREE.BackSide, roughness: 0.8 });
-const DASH = mat(0x2a2c30, { roughness: 0.75 });
-const DASH_TOP = mat(0x1f2124, { roughness: 0.9 });
-const DASH_DARK = mat(0x141517, { roughness: 0.9 });
-const PANEL = mat(0x3b3e44, { roughness: 0.8 });
-const HEADLINER = mat(0x8b8e93, { roughness: 0.95 });
-const SHELF = mat(0x55585e, { roughness: 0.8 });
-const FLOOR = mat(0x1e1f22, { roughness: 0.95 });
-const SEAT = mat(0x33363b, { roughness: 0.95 });
-const SEAT_INSERT = mat(0x45484e, { roughness: 1 });
+const LINING = indoor(mat(0x4a4d53, { side: THREE.BackSide, roughness: 0.8 }), 0.3);
+const cab = (color, opts) => indoor(mat(color, opts), CAB_AMBIENT);
+const DASH = cab(0x2a2c30, { roughness: 0.75 });
+const DASH_TOP = cab(0x1f2124, { roughness: 0.9 });
+const DASH_DARK = cab(0x141517, { roughness: 0.9 });
+const PANEL = cab(0x3b3e44, { roughness: 0.8 });
+const HEADLINER = cab(0x8b8e93, { roughness: 0.95 });
+const SHELF = cab(0x55585e, { roughness: 0.8 });
+const FLOOR = indoor(mat(0x1e1f22, { roughness: 0.95 }));
+const SEAT = cab(0x33363b, { roughness: 0.95 });
+const SEAT_INSERT = cab(0x45484e, { roughness: 1 });
 const SCREEN = mat(0x0f1a26, { roughness: 0.2, emissive: 0x1d3c5c, emissiveIntensity: 0.8 });
 const GAUGE = mat(0x101215, { roughness: 0.3, emissive: 0x0c1620, emissiveIntensity: 0.6 });
 const NEEDLE = mat(0xff5a1f, { emissive: 0xff3a00, emissiveIntensity: 0.8 });
-const WHEEL_MAT = mat(0x1d1e21, { roughness: 0.6 });
-const SKIN = mat(0xd9a07a);
-const SLEEVE = mat(0x3f6b8c);
-const HAIR = mat(0x3a2a1e);
+const WHEEL_MAT = cab(0x1d1e21, { roughness: 0.6 });
+const SKIN = cab(0xd9a07a);
+const SLEEVE = cab(0x3f6b8c);
+const HAIR = cab(0x3a2a1e);
 
 const REFLECTIVE = [GLASS, PRIVACY_GLASS, MIRROR, CHROME, LENS, RIM];
 
@@ -705,18 +712,12 @@ export class VanModel {
 
     this.driver = buildDriver();
     this.door = buildSlidingDoor(this.paint);
-    this.buildout = buildBuildout();
+    this.buildout = new Buildout();
     this.body.add(buildExterior(this.paint), buildInterior(), this.driver, this.door, this.buildout.group);
     this.lightsOn = false;
     this.doorOpen = false;
     this.doorT = 0; // 0 closed .. 1 fully open
 
-    // Stand-ins for daylight bouncing in through the windows (the shell shadows the inside).
-    const cabFill = new THREE.PointLight(0xe8f0ff, 2.2, 4.5, 1.2);
-    cabFill.position.set(0, 2.25, 0.9);
-    const cargoFill = new THREE.PointLight(0xfff4e0, 2.0, 4.5, 1.2);
-    cargoFill.position.set(0, 2.45, -1.7);
-    this.body.add(cabFill, cargoFill);
 
     this.wheels = [];
     for (const z of [VAN.frontAxleZ, VAN.rearAxleZ]) {
@@ -762,8 +763,25 @@ export class VanModel {
     this.buildout.setLights(on);
   }
 
-  // Animates things that move on their own (the sliding door).
+  get bathDoorOpen() {
+    return this.buildout.bathDoorOpen;
+  }
+
+  get showerOn() {
+    return this.buildout.showerOn;
+  }
+
+  setBathDoorOpen(open) {
+    this.buildout.setBathDoorOpen(open);
+  }
+
+  setShower(on) {
+    this.buildout.setShower(on);
+  }
+
+  // Animates things that move on their own (doors, shower water).
   update(dt) {
+    this.buildout.update(dt);
     this.doorT = THREE.MathUtils.clamp(this.doorT + (this.doorOpen ? 1 : -1) * dt * 0.9, 0, 1);
     const ease = (t) => t * t * (3 - 2 * t);
     const out = ease(THREE.MathUtils.clamp(this.doorT / 0.25, 0, 1));

@@ -104,6 +104,9 @@ onKey('KeyE', () => {
   if (action === 'drive') sitDown();
   if (action === 'door') van.setDoorOpen(!van.doorOpen);
   if (action === 'lights') van.setLights(!van.lightsOn);
+  if (action === 'bathDoor') van.setBathDoorOpen(!van.bathDoorOpen);
+  if (action === 'shower') van.setShower(!van.showerOn);
+  if (action === 'flush') audio.flush();
   if (action === 'lie') player.lieDown(van);
   if (action === 'getup') player.getOutOfBed(van);
 });
@@ -192,6 +195,8 @@ function tick(dt) {
     doorOpen: van.doorOpen,
     doorT: van.doorT,
     lightsOn: van.lightsOn,
+    showerOn: van.showerOn,
+    bathDoorOpen: van.bathDoorOpen,
     lying: player.lying,
     walking,
     inside: player.inside,

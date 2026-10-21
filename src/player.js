@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { LAYOUT } from './van/model.js';
 
-const RADIUS = 0.2;
+const RADIUS = 0.18;
 const EYE = 1.62;
 const EYE_DUCK = 1.45; // under the overhead shelf in the cab
 const WALK_SPEED = 1.7;
@@ -62,6 +62,8 @@ function vanWalls(van) {
     [[-w, n], [w, n]], // nose
     [[-w, dashZ], [w, dashZ]], // dashboard
     [[-w + dx, d0 + dz], [-w + dx, d1 + dz]], // sliding door panel
+    ...LAYOUT.walls, // bathroom
+    van.buildout.bathDoorSegment(),
   ];
 }
 
@@ -186,23 +188,43 @@ export class Player {
     if (this.lying) return { action: 'getup', label: 'Get up' };
     const p = this.local;
     const [d0, d1] = LAYOUT.door;
-    const candidates = [
-      {
-        action: 'door',
-        label: van.doorOpen ? 'Close sliding door' : 'Open sliding door',
-        at: [-LAYOUT.wallX, clamp(p.z, d0 + 0.1, d1 - 0.1)],
-        range: 1.3,
-      },
-    ];
-    if (this.inside) {
-      const seat = LAYOUT.driverSeat;
-      const sw = LAYOUT.lightSwitch;
-      candidates.push(
-        // Facing barely matters for the seat, so you can sit straight back down after getting up
-        { action: 'drive', label: 'Drive', at: [seat.x, seat.z], range: 0.9, minFacing: -0.6 },
-        { action: 'lights', label: van.lightsOn ? 'Lights off' : 'Lights on', at: [sw.x, sw.z], range: 0.9 },
-        { action: 'lie', label: 'Lie down', at: [clamp(p.x, -0.3, 0.3), LAYOUT.bedFront.z], range: 0.9 },
-      );
+    const bd = LAYOUT.bathDoor;
+    const bathDoor = {
+      action: 'bathDoor',
+      label: van.bathDoorOpen ? 'Close bathroom door' : 'Open bathroom door',
+      at: [bd.x, bd.z],
+      range: 1.0,
+    };
+    let candidates;
+    if (this.inside && LAYOUT.inBath(p)) {
+      // In the bathroom only its own fixtures are in reach (no reaching through walls).
+      const sv = LAYOUT.showerValve;
+      const t = LAYOUT.toilet;
+      candidates = [
+        bathDoor,
+        { action: 'shower', label: van.showerOn ? 'Turn off shower' : 'Turn on shower', at: [sv.x, sv.z], range: 1.0 },
+        { action: 'flush', label: 'Flush toilet', at: [t.x, t.z], range: 0.8 },
+      ];
+    } else {
+      candidates = [
+        {
+          action: 'door',
+          label: van.doorOpen ? 'Close sliding door' : 'Open sliding door',
+          at: [-LAYOUT.wallX, clamp(p.z, d0 + 0.1, d1 - 0.1)],
+          range: 1.3,
+        },
+      ];
+      if (this.inside) {
+        const seat = LAYOUT.driverSeat;
+        const sw = LAYOUT.lightSwitch;
+        candidates.push(
+          bathDoor,
+          // Facing barely matters for the seat, so you can sit straight back down after getting up
+          { action: 'drive', label: 'Drive', at: [seat.x, seat.z], range: 0.9, minFacing: -0.6 },
+          { action: 'lights', label: van.lightsOn ? 'Lights off' : 'Lights on', at: [sw.x, sw.z], range: 0.9 },
+          { action: 'lie', label: 'Lie down', at: [clamp(p.x, -0.3, 0.3), LAYOUT.bedFront.z], range: 0.9 },
+        );
+      }
     }
 
     const look = this.heading - van.root.rotation.y;

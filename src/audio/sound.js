@@ -30,6 +30,7 @@ export class GameAudio {
     this.prevInside = null;
     this.prevLights = false;
     this.prevLying = false;
+    this.prevBathDoor = false;
   }
 
   // Browsers only allow audio after a user gesture, so this is called from input handlers.
@@ -62,6 +63,7 @@ export class GameAudio {
     this.#buildRoad();
     this.#buildHorn();
     this.#buildAmbient();
+    this.#buildShower();
   }
 
   toggleMute() {
@@ -145,6 +147,15 @@ export class GameAudio {
     S.chain(S.osc(ctx, 'sine', 0.13), S.gain(ctx, 0.025)).connect(breeze.gain);
   }
 
+  #buildShower() {
+    const ctx = this.ctx;
+    this.shower = S.gain(ctx, 0);
+    S.chain(S.loop(ctx, this.white), S.filter(ctx, 'highpass', 1200, 0.5), S.filter(ctx, 'lowpass', 7000, 0.5), this.shower);
+    const splash = S.gain(ctx, 0.6);
+    S.chain(S.loop(ctx, this.brown), S.filter(ctx, 'lowpass', 400, 0.7), splash, this.shower);
+    this.shower.connect(this.direct);
+  }
+
   // Called every frame with a snapshot of the game.
   update(dt, st) {
     if (!this.ctx || this.ctx.state !== 'running') return;
@@ -160,6 +171,7 @@ export class GameAudio {
     this.#updateEngine(dt, st);
     this.#updateRoad(st);
     S.glide(ctx, this.horn.gain, st.horn ? 0.32 : 0, 0.01);
+    S.glide(ctx, this.shower.gain, st.showerOn ? 0.12 : 0, 0.15);
     this.#triggers(dt, st);
 
     this.birdTimer -= dt;
@@ -253,6 +265,8 @@ export class GameAudio {
     this.prevDoorOpen = st.doorOpen;
     this.prevDoorT = st.doorT;
 
+    if (st.bathDoorOpen !== this.prevBathDoor) this.bathDoor(st.bathDoorOpen);
+    this.prevBathDoor = st.bathDoorOpen;
     if (st.lightsOn !== this.prevLights) this.switchClick();
     if (st.lying !== this.prevLying) this.rustle();
     this.prevLights = st.lightsOn;
@@ -319,6 +333,24 @@ export class GameAudio {
     const { ctx, direct: out, white } = this;
     S.noiseHit(ctx, out, white, { freq: 4000, q: 3, peak: 0.25, decay: 0.015 });
     S.toneHit(ctx, out, { type: 'square', freq: 1800, freqEnd: 1200, peak: 0.03, decay: 0.012 });
+  }
+
+  // Pocket door rolling along its track
+  bathDoor(opening) {
+    const { ctx, direct: out, white } = this;
+    S.noiseHit(ctx, out, white, { freq: 1100, q: 1.5, peak: 0.12, attack: 0.05, decay: 0.35, sweepTo: opening ? 700 : 1500 });
+    if (!opening) {
+      S.toneHit(ctx, out, { freq: 140, freqEnd: 90, peak: 0.25, decay: 0.08, delay: 0.42 }); // soft bump at the jamb
+      S.noiseHit(ctx, out, white, { freq: 3000, q: 2, peak: 0.1, decay: 0.03, delay: 0.43 }); // latch
+    }
+  }
+
+  flush() {
+    const { ctx, direct: out, white, brown } = this;
+    S.noiseHit(ctx, out, white, { freq: 2500, q: 3, peak: 0.1, decay: 0.03 }); // button
+    S.noiseHit(ctx, out, white, { freq: 900, q: 0.8, peak: 0.3, attack: 0.08, decay: 1.4, delay: 0.1, sweepTo: 400 });
+    S.noiseHit(ctx, out, brown, { type: 'lowpass', freq: 500, peak: 0.4, attack: 0.1, decay: 1.2, delay: 0.1 });
+    S.toneHit(ctx, out, { type: 'triangle', freq: 180, freqEnd: 90, peak: 0.05, attack: 0.05, decay: 0.6, delay: 1.0 }); // gurgle
   }
 
   // Bedding when lying down or getting up
