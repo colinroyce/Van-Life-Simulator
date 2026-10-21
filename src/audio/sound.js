@@ -28,6 +28,8 @@ export class GameAudio {
     this.prevDoorT = 0;
     this.prevDoorOpen = false;
     this.prevInside = null;
+    this.prevLights = false;
+    this.prevLying = false;
   }
 
   // Browsers only allow audio after a user gesture, so this is called from input handlers.
@@ -251,6 +253,11 @@ export class GameAudio {
     this.prevDoorOpen = st.doorOpen;
     this.prevDoorT = st.doorT;
 
+    if (st.lightsOn !== this.prevLights) this.switchClick();
+    if (st.lying !== this.prevLying) this.rustle();
+    this.prevLights = st.lightsOn;
+    this.prevLying = st.lying;
+
     if (st.walking) {
       if (this.prevInside !== null && st.inside !== this.prevInside) {
         this.footstep(st.footSurface, true);
@@ -306,6 +313,22 @@ export class GameAudio {
     S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 1400, peak: 1.0, decay: 0.18 });
     S.noiseHit(ctx, out, white, { freq: 2800, q: 2, peak: 0.3, decay: 0.05, delay: 0.02 }); // latch
     S.noiseHit(ctx, out, white, { freq: 700, q: 4, peak: 0.16, decay: 0.35 }); // rattle
+  }
+
+  switchClick() {
+    const { ctx, direct: out, white } = this;
+    S.noiseHit(ctx, out, white, { freq: 4000, q: 3, peak: 0.25, decay: 0.015 });
+    S.toneHit(ctx, out, { type: 'square', freq: 1800, freqEnd: 1200, peak: 0.03, decay: 0.012 });
+  }
+
+  // Bedding when lying down or getting up
+  rustle() {
+    const { ctx, direct: out, white } = this;
+    for (let i = 0; i < 3; i++) {
+      S.noiseHit(ctx, out, white, {
+        type: 'highpass', freq: 1800 + Math.random() * 1500, peak: 0.08, attack: 0.08, decay: 0.25, delay: i * 0.18,
+      });
+    }
   }
 
   footstep(surface, heavy = false) {

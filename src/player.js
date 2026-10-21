@@ -78,26 +78,54 @@ export class Player {
     this.inside = true;
     this.moved = 0; // meters walked last update (for footsteps)
     this.running = false;
+    this.lying = false;
+    this.headPos = new THREE.Vector3(); // eye position while lying in bed
   }
 
   // Stand up between the front seats, facing the back of the van.
   standUp(van) {
-    van.root.updateMatrixWorld(true);
-    this.local.copy(LAYOUT.standUp);
-    this.position.copy(van.root.localToWorld(this.local.clone()));
-    this.position.y = 0;
-    this.heading = van.root.rotation.y + Math.PI;
-    this.pitch = -0.15;
-    this.inside = true;
-    this.floorY = LAYOUT.floorY;
+    this.#placeInside(van, LAYOUT.standUp, Math.PI, -0.15);
     this.eye = EYE_DUCK;
     this.#placeCamera();
+  }
+
+  lieDown(van) {
+    van.root.updateMatrixWorld(true);
+    this.lying = true;
+    this.headPos.copy(van.body.localToWorld(LAYOUT.bedHead.clone()));
+    this.heading = van.root.rotation.y - Math.PI / 2; // looking down the bed toward your feet
+    this.pitch = 0.35;
+    this.moved = 0;
+    this.#placeCamera();
+  }
+
+  getOutOfBed(van) {
+    this.lying = false;
+    this.#placeInside(van, LAYOUT.bedStand, 0, -0.1);
+    this.#placeCamera();
+  }
+
+  #placeInside(van, localSpot, localHeading, pitch) {
+    van.root.updateMatrixWorld(true);
+    this.local.copy(localSpot);
+    this.position.copy(van.root.localToWorld(this.local.clone()));
+    this.position.y = 0;
+    this.heading = van.root.rotation.y + localHeading;
+    this.pitch = pitch;
+    this.inside = true;
+    this.floorY = LAYOUT.floorY;
+    this.eye = EYE;
   }
 
   update(dt, input, mouse, van, world, bounds) {
     this.heading -= mouse.x * LOOK_SENSITIVITY;
     this.heading += input.turn * TURN_RATE * dt;
-    this.pitch = clamp(this.pitch - mouse.y * LOOK_SENSITIVITY, -1.45, 1.45);
+    const [minPitch, maxPitch] = this.lying ? [-0.4, 1.3] : [-1.45, 1.45];
+    this.pitch = clamp(this.pitch - mouse.y * LOOK_SENSITIVITY, minPitch, maxPitch);
+    if (this.lying) {
+      this.#placeCamera();
+      return;
+    }
 
     const fx = Math.sin(this.heading);
     const fz = Math.cos(this.heading);
@@ -153,29 +181,53 @@ export class Player {
     this.position.z = clamp(this.position.z, -bounds, bounds);
   }
 
-  // What E would do right now, or null.
+  // What E would do right now, or null. Picks the nearby thing you're most facing.
   interaction(van) {
+    if (this.lying) return { action: 'getup', label: 'Get up' };
     const p = this.local;
     const [d0, d1] = LAYOUT.door;
-    const seat = LAYOUT.driverSeat;
-    const seatDist = this.inside ? Math.hypot(p.x - seat.x, p.z - seat.z) : Infinity;
-
-    let doorDist = Infinity;
-    const alongDoor = p.z > d0 - 0.3 && p.z < d1 + 0.3;
-    if (this.inside && p.x < -0.3 && alongDoor) doorDist = p.x + LAYOUT.wallX;
-    if (!this.inside && p.x < -LAYOUT.wallX && p.x > -2.3 && p.z > d0 - 0.8 && p.z < d1 + 0.4) {
-      doorDist = -LAYOUT.wallX - p.x;
+    const candidates = [
+      {
+        action: 'door',
+        label: van.doorOpen ? 'Close sliding door' : 'Open sliding door',
+        at: [-LAYOUT.wallX, clamp(p.z, d0 + 0.1, d1 - 0.1)],
+        range: 1.3,
+      },
+    ];
+    if (this.inside) {
+      const seat = LAYOUT.driverSeat;
+      const sw = LAYOUT.lightSwitch;
+      candidates.push(
+        // Facing barely matters for the seat, so you can sit straight back down after getting up
+        { action: 'drive', label: 'Drive', at: [seat.x, seat.z], range: 0.9, minFacing: -0.6 },
+        { action: 'lights', label: van.lightsOn ? 'Lights off' : 'Lights on', at: [sw.x, sw.z], range: 0.9 },
+        { action: 'lie', label: 'Lie down', at: [clamp(p.x, -0.3, 0.3), LAYOUT.bedFront.z], range: 0.9 },
+      );
     }
 
-    if (seatDist < 0.75 && seatDist <= doorDist) return { action: 'drive', label: 'Drive' };
-    if (doorDist < 1.3) {
-      return { action: 'door', label: van.doorOpen ? 'Close sliding door' : 'Open sliding door' };
+    const look = this.heading - van.root.rotation.y;
+    const lx = Math.sin(look);
+    const lz = Math.cos(look);
+    let best = null;
+    let bestScore = Infinity;
+    for (const c of candidates) {
+      const dx = c.at[0] - p.x;
+      const dz = c.at[1] - p.z;
+      const dist = Math.hypot(dx, dz);
+      const facing = dist < 0.05 ? 1 : (dx * lx + dz * lz) / dist;
+      if (dist > c.range || facing < (c.minFacing ?? 0.2)) continue;
+      const score = dist * (1.6 - facing);
+      if (score < bestScore) {
+        best = c;
+        bestScore = score;
+      }
     }
-    return null;
+    return best;
   }
 
   #placeCamera() {
-    this.camera.position.set(this.position.x, this.floorY + this.eye, this.position.z);
+    if (this.lying) this.camera.position.copy(this.headPos);
+    else this.camera.position.set(this.position.x, this.floorY + this.eye, this.position.z);
     this.camera.rotation.set(this.pitch, this.heading + Math.PI, 0);
   }
 }

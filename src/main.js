@@ -100,9 +100,12 @@ function sitDown() {
 
 onKey('KeyE', () => {
   if (mode === 'drive') return getUp();
-  const it = player.interaction(van);
-  if (it?.action === 'drive') sitDown();
-  if (it?.action === 'door') van.setDoorOpen(!van.doorOpen);
+  const action = player.interaction(van)?.action;
+  if (action === 'drive') sitDown();
+  if (action === 'door') van.setDoorOpen(!van.doorOpen);
+  if (action === 'lights') van.setLights(!van.lightsOn);
+  if (action === 'lie') player.lieDown(van);
+  if (action === 'getup') player.getOutOfBed(van);
 });
 onKey('KeyC', () => {
   if (mode !== 'drive') return;
@@ -188,6 +191,8 @@ function tick(dt) {
     coneHit,
     doorOpen: van.doorOpen,
     doorT: van.doorT,
+    lightsOn: van.lightsOn,
+    lying: player.lying,
     walking,
     inside: player.inside,
     moved: walking ? player.moved : 0,

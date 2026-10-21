@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { BUILD, buildBuildout } from './buildout.js';
 
 // Modeled on a Sprinter 144" wheelbase high roof. Van faces +Z, driver on the left (+X). Meters.
 export const VAN = {
@@ -144,7 +145,12 @@ export const LAYOUT = {
     [-0.18, 0.18, 0.875, 1.325], // center console
     [0.7, 1.0, -2.36, -1.3], // rear wheel wells
     [-1.0, -0.7, -2.36, -1.3],
+    ...BUILD.blocks,
   ],
+  lightSwitch: BUILD.lightSwitch,
+  bedFront: BUILD.bedFront,
+  bedStand: BUILD.bedStand,
+  bedHead: BUILD.bedHead,
   cabZ: 0.38, // forward of this the overhead shelf makes you duck
 };
 
@@ -627,8 +633,7 @@ function buildInterior() {
     g.add(box(0.28, 0.04, 0.68, FLOOR, side * 0.84, 0.68, -2.71));
   }
 
-  // Headliner and the high-roof storage shelf over the cab
-  g.add(box(1.6, 0.03, 3.45, HEADLINER, 0, 2.7, -1.26));
+  // High-roof storage shelf over the cab (the cargo ceiling is part of the build-out)
   g.add(box(1.6, 0.04, 0.45, SHELF, 0, 2.33, 0.66));
   g.add(box(1.6, 0.08, 0.03, SHELF, 0, 2.37, 0.87));
 
@@ -700,7 +705,9 @@ export class VanModel {
 
     this.driver = buildDriver();
     this.door = buildSlidingDoor(this.paint);
-    this.body.add(buildExterior(this.paint), buildInterior(), this.driver, this.door);
+    this.buildout = buildBuildout();
+    this.body.add(buildExterior(this.paint), buildInterior(), this.driver, this.door, this.buildout.group);
+    this.lightsOn = false;
     this.doorOpen = false;
     this.doorT = 0; // 0 closed .. 1 fully open
 
@@ -748,6 +755,11 @@ export class VanModel {
 
   setDoorOpen(open) {
     this.doorOpen = open;
+  }
+
+  setLights(on) {
+    this.lightsOn = on;
+    this.buildout.setLights(on);
   }
 
   // Animates things that move on their own (the sliding door).
