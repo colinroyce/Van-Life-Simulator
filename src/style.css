@@ -506,3 +506,25 @@ kbd {
   left: 26%;
   bottom: -30px;
 }
+
+#cruise {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #6dd96d;
+}
+
+#map-view {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+#map-view .map-hint {
+  position: absolute;
+  right: 24px;
+  bottom: 30px;
+  font: 14px sans-serif;
+  color: #4a3f2c;
+}

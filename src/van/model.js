@@ -827,6 +827,16 @@ export class VanModel {
     this.#buildSteering();
     this.setOccupant('chase');
     this.screen = this.body.getObjectByName('gpsDisplay');
+    // Rolled-up road map lying on the passenger seat
+    this.roadMap = new THREE.Group();
+    this.roadMap.position.set(-0.46, 1.205, 0.78);
+    this.roadMap.rotation.y = 0.5;
+    const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.42, 10), mat(0xeee4c8));
+    roll.rotation.z = Math.PI / 2;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.03, 10), mat(0xc0392b));
+    band.rotation.z = Math.PI / 2;
+    this.roadMap.add(roll, band);
+    this.body.add(this.roadMap);
     this.screenOff = this.screen.material;
   }
 

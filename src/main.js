@@ -4,6 +4,7 @@ import { VanSim } from './van/physics.js';
 import { World, createEnvironment } from './world.js';
 import { RoadTripWorld } from './map/roadTrip.js';
 import { Gps } from './ui/gps.js';
+import { MapView } from './ui/mapView.js';
 import { CameraRig } from './cameras.js';
 import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey, onLockedClick, onScroll } from './input.js';
 import { Player } from './player.js';
@@ -50,6 +51,7 @@ const sim = new VanSim();
 sim.ground = (x, z) => world.groundHeight(x, z);
 const cameras = new CameraRig(van);
 cameras.ground = sim.ground;
+const mapView = world.route && new MapView(document.getElementById('map-view'), world.route, world.destination);
 const gps = world.route && new Gps(world.route, world.destination, [{ x: 42, z: 40, icon: '⛽' }]);
 const player = new Player(window.innerWidth / window.innerHeight);
 const audio = new GameAudio();
@@ -177,7 +179,31 @@ function sitDown() {
   setMode('drive');
 }
 
-const busy = () => fade.active || sleepWheel.isOpen;
+const busy = () => fade.active || sleepWheel.isOpen || mapView?.isOpen;
+
+// The rolled-up road map on the passenger seat: look at it from the driver's seat and press E.
+const MAP_AIM = 0.35; // radians off-center that still counts as looking at it
+function lookingAtMap() {
+  if (!mapView || cameras.mode !== 'cockpit') return false;
+  const eye = cameras.cockpit.getWorldPosition(new THREE.Vector3());
+  const look = cameras.cockpit.getWorldDirection(new THREE.Vector3());
+  const to = van.roadMap.getWorldPosition(new THREE.Vector3()).sub(eye);
+  return look.angleTo(to) < MAP_AIM;
+}
+
+function openMap() {
+  if (isPointerLocked()) document.exitPointerLock();
+  mapView.open(sim.position, world.locate(sim.position.x, sim.position.z).s);
+}
+
+// Cruise control: holds the speed you set it at; braking (or X again) turns it off.
+let cruiseSpeed = 0;
+function setCruise(speed) {
+  cruiseSpeed = speed;
+  const label = document.getElementById('cruise');
+  label.hidden = !speed;
+  label.textContent = speed ? `CRUISE ${Math.round(speed * 2.23694)}` : '';
+}
 
 function openSleepWheel() {
   if (isPointerLocked()) document.exitPointerLock();
@@ -238,10 +264,12 @@ function takeShower() {
 
 onKey('KeyE', () => {
   if (fade.active) return;
+  if (mapView?.isOpen) return mapView.close();
   if (sleepWheel.isOpen) return sleep(sleepWheel.hours);
   if (mode === 'drive') {
     const drink = cameras.mode === 'cockpit' && items.cockpitAction(cameras.cockpit);
     if (drink) return drink.run();
+    if (lookingAtMap()) return openMap();
     return canGetOutDriverSide() ? getOutDriverSide() : getUp();
   }
   const itemAction = items.actions().e;
@@ -261,7 +289,16 @@ onKey('KeyQ', () => {
   if (player.lying) return player.getOutOfBed(van);
   items.actions().e?.alt?.run();
 });
-onKey('Escape', () => sleepWheel.isOpen && sleepWheel.close());
+onKey('Escape', () => {
+  if (sleepWheel.isOpen) sleepWheel.close();
+  if (mapView?.isOpen) mapView.close();
+});
+onKey('KeyX', () => {
+  if (mode !== 'drive' || busy()) return;
+  if (cruiseSpeed) return setCruise(0);
+  if (sim.speed < 4) return flashCamLabel('Get up to speed to set cruise');
+  setCruise(sim.speed);
+});
 for (const [code, delta] of [['KeyA', -1], ['ArrowLeft', -1], ['KeyD', 1], ['ArrowRight', 1]]) {
   onKey(code, () => sleepWheel.isOpen && sleepWheel.adjust(delta));
 }
@@ -345,6 +382,10 @@ let acc = 0;
 function tick(dt) {
   const mouse = takeMouseDelta();
   const driveInput = readDriveInput();
+  if (cruiseSpeed) {
+    if (driveInput.brake || driveInput.handbrake || mode !== 'drive' || needs.values.fuel <= 0) setCruise(0);
+    else if (!driveInput.throttle) driveInput.throttle = sim.speed < cruiseSpeed ? 1 : 0;
+  }
   let impact = 0;
   let coneHit = 0;
 
@@ -384,9 +425,10 @@ function tick(dt) {
     hud.gear.textContent = sim.gear;
     const drink = cockpit && items.cockpitAction(cameras.cockpit);
     const stopped = Math.abs(sim.speed) <= 0.5;
-    hud.prompt.hidden = !drink && !stopped;
+    const map = !drink && lookingAtMap();
+    hud.prompt.hidden = (!drink && !map && !stopped) || busy();
     const getUpLabel = canGetOutDriverSide() ? 'Get out' : 'Get up';
-    hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : getUpLabel}`;
+    hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : map ? 'Look at map' : getUpLabel}`;
     hud.crosshair.hidden = !(cockpit && isPointerLocked());
     hud.heldHint.textContent = '';
     hud.lookHint.hidden = true;
