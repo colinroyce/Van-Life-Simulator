@@ -3,12 +3,12 @@ import { indoor } from '../van/indoor.js';
 import { createPack, createBuns } from '../items/food.js';
 
 // "GAS & GO" convenience store. Built in its own local frame (front faces +Z, centered on the
-// origin) and dropped into the world with place(). Inside: glass-door coolers along the back
-// wall (hot dogs), a shelf of buns along the left wall, a snack aisle and a register with a clerk.
+// origin) and dropped into the world with place(). Inside: a glass-door cooler of hot dogs on the
+// back wall, a shelf of buns on the left wall, and a register with a clerk beside the entrance.
 // Sliding front doors open as you walk up, unless you're trying to leave without paying.
 
-const W = 12; // width (x)
-const D = 9; // depth (z)
+const W = 7; // width (x)
+const D = 6; // depth (z)
 const H = 3.4; // wall height
 const T = 0.2; // wall thickness
 const DOOR = { half: 0.8, height: 2.5 };
@@ -23,17 +23,18 @@ const GLASS = mat(0x9fc6d8, { roughness: 0.05, metalness: 0.2, transparent: true
 const FRAME = mat(0x2b2d31, { roughness: 0.5 });
 const WALL_IN = inside(0xf1efe9);
 const FLOOR = inside(0xd8d8d2, { roughness: 0.5 });
-const CEILING = inside(0xf4f4f2);
+// Lit evenly by the fixtures; on its own its underside would only catch the green ground light.
+const CEILING = mat(0xf4f4f2, { emissive: 0xc9cbc8, emissiveIntensity: 0.55 });
 const PANEL_LIGHT = mat(0xffffff, { emissive: 0xfafcff, emissiveIntensity: 1.2 });
 const COOLER = inside(0x2f3237, { roughness: 0.5 });
 const COOLER_IN = mat(0xe9eef2, { emissive: 0xdfe9f5, emissiveIntensity: 0.45 });
 const SHELF = inside(0x8d939a, { roughness: 0.6 });
 const COUNTER = inside(0x6b4a33);
 const COUNTER_TOP = inside(0x2b2d31, { roughness: 0.4 });
+const COUNTER_STEEL = inside(0xb9bdc1, { metalness: 0.4, roughness: 0.35 });
+const SIGN_BLUE = inside(0x2e5fb8);
 const SKIN = inside(0xc98f6b);
 const SHIRT = inside(0xc0392b);
-const PRODUCT_COLORS = [0xe74c3c, 0x3498db, 0xf1c40f, 0x2ecc71, 0x9b59b6, 0xe67e22, 0x1abc9c];
-const PRODUCTS = PRODUCT_COLORS.map((c) => inside(c, { roughness: 0.5 }));
 
 function slab(x0, x1, y0, y1, z0, z1, material, parent) {
   const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, z1 - z0), material);
@@ -164,25 +165,29 @@ export class ConvenienceStore {
     const g = this.group;
     const hw = W / 2;
     const hd = D / 2;
-    slab(-hw, hw, -0.02, 0.012, -hd, hd, FLOOR, g);
+    slab(-hw, hw, -0.02, 0.03, -hd, hd, FLOOR, g); // above the lot's asphalt so they don't flicker
 
     // Back and side walls, with white inner lining
-    this.#wall(-hw, hw, -hd, -hd + T);
+    this.#wall(-hw + T, hw - T, -hd, -hd + T); // between the side walls, not overlapping them
     this.#wall(-hw, -hw + T, -hd, hd);
     this.#wall(hw - T, hw, -hd, hd);
     slab(-hw + T, hw - T, 0, H, -hd + T, -hd + T + 0.01, WALL_IN, g);
-    slab(-hw + T, -hw + T + 0.01, 0, H, -hd + T, hd - T, WALL_IN, g);
-    slab(hw - T - 0.01, hw - T, 0, H, -hd + T, hd - T, WALL_IN, g);
+    slab(-hw + T, -hw + T + 0.01, 0, H, -hd + T + 0.01, hd - T, WALL_IN, g);
+    slab(hw - T - 0.01, hw - T, 0, H, -hd + T + 0.01, hd - T, WALL_IN, g);
 
     // Front: low wall under big windows, a sign band above, doorway in the middle
     const fz0 = hd - T;
-    for (const [x0, x1] of [[-hw, -DOOR.half], [DOOR.half, hw]]) {
+    // Each section runs from the side wall to the door frame without overlapping either, since
+    // overlapping boxes with shared faces flicker.
+    const frame = DOOR.half + 0.05;
+    for (const [x0, x1] of [[-hw + T, -frame], [frame, hw - T]]) {
       slab(x0, x1, 0, WINDOW.bottom, fz0, hd, STUCCO, g);
       slab(x0, x1, WINDOW.top, H, fz0, hd, STUCCO, g);
       const glass = slab(x0, x1, WINDOW.bottom, WINDOW.top, hd - T / 2 - 0.01, hd - T / 2 + 0.01, GLASS, g);
       glass.castShadow = false;
       glass.userData.noAim = true;
-      for (let x = x0; x <= x1 + 1e-6; x += (x1 - x0) / 4) {
+      for (let k = 1; k < 4; k++) {
+        const x = x0 + ((x1 - x0) * k) / 4;
         slab(x - 0.04, x + 0.04, WINDOW.bottom, WINDOW.top, hd - T, hd, FRAME, g);
       }
     }
@@ -212,15 +217,17 @@ export class ConvenienceStore {
     slab(-hw - 0.3, -hw - 0.2, H + 0.25, H + 0.5, -hd - 0.3, hd + 0.3, TRIM, g);
     slab(hw + 0.2, hw + 0.3, H + 0.25, H + 0.5, -hd - 0.3, hd + 0.3, TRIM, g);
     slab(-hw + T, hw - T, H - 0.06, H - 0.04, -hd + T, hd - T, CEILING, g);
-    for (const x of [-3, 3]) {
-      for (const z of [-2.2, 1.8]) slab(x - 0.6, x + 0.6, H - 0.07, H - 0.06, z - 0.3, z + 0.3, PANEL_LIGHT, g);
-      const light = new THREE.PointLight(0xf4f8ff, 9, 11, 1.4);
-      light.position.set(x, H - 0.3, -0.2);
+    // Light panels, each with a soft light hung well below the ceiling so it lights the room
+    // evenly instead of making a hot spot on the ceiling
+    for (const [x, z] of [[-1.6, -1.0], [0.9, -1.2], [2.5, 1.6]]) {
+      slab(x - 0.6, x + 0.6, H - 0.07, H - 0.06, z - 0.3, z + 0.3, PANEL_LIGHT, g);
+      const light = new THREE.PointLight(0xfff8ef, 3.5, 10, 1);
+      light.position.set(x, H - 0.9, z);
       g.add(light);
     }
 
     // Sign on the band above the windows
-    const sign = new THREE.Mesh(new THREE.PlaneGeometry(6.4, 0.9), new THREE.MeshBasicMaterial({ map: signTexture() }));
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(W - 1.6, 0.8), new THREE.MeshBasicMaterial({ map: signTexture() }));
     sign.position.set(0, (WINDOW.top + H) / 2 + 0.05, hd + 0.01);
     g.add(sign);
 
@@ -235,128 +242,103 @@ export class ConvenienceStore {
     );
   }
 
-  // Three glass-door coolers on the back wall; hot dogs in the middle one.
+  // Glass-door cooler on the back wall with packs of hot dogs.
   #buildCoolers() {
     const g = this.group;
     const back = -D / 2 + T;
     const front = back + 0.7;
     const unit = 0.9;
-    const x0 = -1.5 * unit;
-    const x1 = -x0;
-    // Cabinet frame: base, top, back and the uprights between the doors
+    const x0 = -unit / 2;
+    const x1 = unit / 2;
+    // Cabinet: base, top, back, sides and a lit back panel
     slab(x0 - 0.05, x1 + 0.05, 0, 0.12, back, front, COOLER, g);
     slab(x0 - 0.05, x1 + 0.05, 2.05, 2.15, back, front, COOLER, g);
     slab(x0 - 0.05, x1 + 0.05, 0.12, 2.05, back, back + 0.04, COOLER, g);
-    for (let k = 0; k <= 3; k++) {
-      const x = x0 + unit * k;
-      slab(x - 0.03, x + 0.03, 0.12, 2.05, back, front, COOLER, g);
+    for (const x of [x0, x1]) slab(x - 0.03, x + 0.03, 0.12, 2.05, back, front, COOLER, g);
+    slab(x0 + 0.03, x1 - 0.03, 0.12, 2.05, back + 0.04, back + 0.05, COOLER_IN, g);
+    const y = 0.95;
+    const shelf = slab(x0 + 0.05, x1 - 0.05, y - 0.012, y, back + 0.05, front - 0.02, SHELF, g);
+    shelf.userData.fixture = 'hotdogCooler';
+    for (let i = 0; i < 4; i++) {
+      const pack = createPack();
+      pack.refresh({ count: 6 });
+      pack.group.position.set(-0.3 + i * 0.2, y, front - 0.2);
+      pack.group.rotation.y = Math.PI / 2;
+      g.add(pack.group);
+      this.#shopItem('hotdogs', 6, pack.group, 'hotdogCooler');
     }
-    for (let u = 0; u < 3; u++) {
-      const cx = x0 + unit * (u + 0.5);
-      // Lit back panel
-      slab(cx - unit / 2 + 0.03, cx + unit / 2 - 0.03, 0.12, 2.05, back + 0.04, back + 0.05, COOLER_IN, g);
-      for (const y of [0.5, 0.95, 1.4]) {
-        const shelf = slab(cx - unit / 2 + 0.05, cx + unit / 2 - 0.05, y - 0.012, y, back + 0.05, front - 0.02, SHELF, g);
-        shelf.userData.fixture = u === 1 ? 'hotdogCooler' : 'cooler';
-        if (u === 1 && y === 0.95) {
-          for (let i = 0; i < 4; i++) {
-            const pack = createPack();
-            pack.refresh({ count: 6 });
-            pack.group.position.set(cx - 0.3 + i * 0.2, y, front - 0.2);
-            pack.group.rotation.y = Math.PI / 2;
-            g.add(pack.group);
-            this.#shopItem('hotdogs', 6, pack.group, 'hotdogCooler');
-          }
-        } else {
-          // Drinks for decoration
-          for (let i = 0; i < 6; i++) {
-            const can = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.2, 8), PRODUCTS[(u * 3 + i + y * 10) % PRODUCTS.length]);
-            can.position.set(cx - 0.32 + i * 0.13, y + 0.1, front - 0.2);
-            g.add(can);
-          }
-        }
-      }
-      // Glass door hinged on its left edge
-      const pivot = new THREE.Group();
-      pivot.position.set(cx - unit / 2 + 0.03, 0, front + 0.03);
-      slab(0, unit - 0.06, 0.12, 2.05, -0.01, 0.01, GLASS, pivot).userData.noAim = true;
-      slab(0, 0.03, 0.12, 2.05, -0.015, 0.015, FRAME, pivot);
-      slab(unit - 0.09, unit - 0.06, 0.12, 2.05, -0.015, 0.015, FRAME, pivot);
-      slab(unit - 0.14, unit - 0.12, 0.8, 1.4, 0.015, 0.04, FRAME, pivot); // handle
-      g.add(pivot);
-      this.coolerDoors.push({ pivot, x: cx, t: 0 });
-    }
+    // Glass door hinged on its left edge
+    const pivot = new THREE.Group();
+    pivot.position.set(x0 + 0.03, 0, front + 0.03);
+    slab(0, unit - 0.06, 0.12, 2.05, -0.01, 0.01, GLASS, pivot).userData.noAim = true;
+    slab(0, 0.03, 0.12, 2.05, -0.015, 0.015, FRAME, pivot);
+    slab(unit - 0.09, unit - 0.06, 0.12, 2.05, -0.015, 0.015, FRAME, pivot);
+    slab(unit - 0.14, unit - 0.12, 0.8, 1.4, 0.015, 0.04, FRAME, pivot); // handle
+    g.add(pivot);
+    this.coolerDoors.push({ pivot, x: 0, t: 0 });
     this.localWalls.push([[x0 - 0.05, front], [x1 + 0.05, front]]);
   }
 
-  // Bread shelf along the left wall, and a snack aisle in the middle.
+  // Bread shelf along the left wall with bags of buns.
   #buildShelves() {
     const g = this.group;
     const x0 = -W / 2 + T;
     const x1 = x0 + 0.6;
-    const z0 = -2.6;
-    const z1 = 1.4;
+    const z0 = -1.9;
+    const z1 = -0.2;
     slab(x0, x1, 0, 0.1, z0, z1, SHELF, g);
-    slab(x0, x0 + 0.04, 0, 1.7, z0, z1, SHELF, g);
-    for (const y of [0.45, 0.9, 1.35]) {
-      const shelf = slab(x0, x1, y - 0.02, y, z0, z1, SHELF, g);
-      shelf.userData.fixture = y === 0.9 ? 'bunShelf' : 'shelf';
-    }
+    slab(x0, x0 + 0.04, 0, 1.2, z0, z1, SHELF, g);
+    const shelf = slab(x0, x1, 0.88, 0.9, z0, z1, SHELF, g);
+    shelf.userData.fixture = 'bunShelf';
     for (let i = 0; i < 4; i++) {
       const buns = createBuns();
       buns.refresh({ count: 8 });
-      buns.group.position.set(x1 - 0.2, 0.9, -1.6 + i * 0.32);
+      buns.group.position.set(x1 - 0.2, 0.9, -1.6 + i * 0.36);
       buns.group.rotation.y = Math.PI / 2;
       g.add(buns.group);
       this.#shopItem('buns', 4, buns.group, 'bunShelf');
     }
-    // Boxes of other stuff on the remaining shelves
-    for (const y of [0.45, 1.35]) {
-      for (let z = z0 + 0.15; z < z1 - 0.1; z += 0.28) {
-        const h = 0.18 + ((z * 7) % 0.1);
-        slab(x0 + 0.1, x0 + 0.4, y, y + h, z - 0.1, z + 0.1, PRODUCTS[Math.abs(Math.round(z * 3 + y * 5)) % PRODUCTS.length], g);
-      }
-    }
     this.localWalls.push([[x1, z0], [x1, z1]], [[x0, z0], [x1, z0]], [[x0, z1], [x1, z1]]);
-
-    // Double-sided snack aisle
-    const ax0 = -3.2;
-    const ax1 = 0.4;
-    const az0 = -1.1;
-    const az1 = -0.3;
-    slab(ax0, ax1, 0, 0.1, az0, az1, SHELF, g);
-    slab(ax0, ax1, 0, 1.4, -0.72, -0.68, SHELF, g);
-    for (const y of [0.4, 0.85, 1.3]) {
-      slab(ax0, ax1, y - 0.02, y, az0, az1, SHELF, g);
-      for (let x = ax0 + 0.2; x < ax1 - 0.1; x += 0.3) {
-        for (const z of [az0 + 0.15, az1 - 0.15]) {
-          slab(x - 0.1, x + 0.1, y, y + 0.22, z - 0.08, z + 0.08, PRODUCTS[Math.abs(Math.round(x * 4 + y * 3 + z)) % PRODUCTS.length], g);
-        }
-      }
-    }
-    this.localWalls.push([[ax0, az0], [ax1, az0]], [[ax0, az1], [ax1, az1]], [[ax0, az0], [ax0, az1]], [[ax1, az0], [ax1, az1]]);
   }
 
-  // Checkout counter near the door, a register on top and a clerk behind it.
+  // Cashier's enclosure in the front-right corner beside the entrance: a long counter facing the
+  // entrance aisle (steel front, blue sign) and a return closing it off, with the clerk behind it.
   #buildCounter() {
     const g = this.group;
-    const [x0, x1, z0, z1] = [2.2, 4.6, 1.8, 2.5];
-    slab(x0, x1, 0, 0.98, z0, z1, COUNTER, g);
-    slab(x0 - 0.03, x1 + 0.03, 0.98, 1.02, z0 - 0.03, z1 + 0.03, COUNTER_TOP, g);
+    const xIn = W / 2 - T; // inside face of the right wall
+    const zIn = D / 2 - T; // inside face of the front wall
+    const cx0 = 1.6; // counter front, facing the customer (-X)
+    const cx1 = 2.2;
+    const zBack = 0.3; // the return closes the enclosure here
+    const rz = (zBack + 0.5 + zIn) / 2; // middle of the main counter, where the register sits
+    const top = 1.0;
+
+    // Main counter, running back from the front wall
+    slab(cx0 + 0.02, cx1, 0, top, zBack + 0.5, zIn, COUNTER, g);
+    slab(cx0, cx0 + 0.02, 0.06, top - 0.04, zBack + 0.5, zIn, COUNTER_STEEL, g);
+    slab(cx0 - 0.005, cx0, 0.35, 0.75, rz - 0.4, rz + 0.4, SIGN_BLUE, g);
+    slab(cx0 - 0.04, cx1 + 0.02, top, top + 0.04, zBack + 0.5, zIn, COUNTER_TOP, g);
+    // Return along the side, closing off the clerk's corner
+    slab(cx0 + 0.02, xIn, 0, top, zBack, zBack + 0.5, COUNTER, g);
+    slab(cx0, cx0 + 0.02, 0.06, top - 0.04, zBack, zBack + 0.5, COUNTER_STEEL, g);
+    slab(cx0 - 0.04, xIn, top, top + 0.04, zBack - 0.02, zBack + 0.5, COUNTER_TOP, g);
+
+    // Register on the counter
     const register = new THREE.Group();
     register.userData.fixture = 'register';
-    slab(3.2, 3.6, 1.02, 1.14, 2.0, 2.3, COUNTER_TOP, register);
-    const screen = slab(3.25, 3.55, 1.16, 1.36, 2.2, 2.23, mat(0x0f1a26, { emissive: 0x1d3c5c, emissiveIntensity: 0.9 }), register);
-    screen.rotation.x = -0.25;
-    slab(3.38, 3.42, 1.14, 1.2, 2.18, 2.22, COUNTER_TOP, register);
-    // Generous invisible target over the whole counter top
-    const proxy = slab(x0, x1, 1.02, 1.5, z0, z1, new THREE.MeshBasicMaterial({ visible: false }), register);
+    slab(cx0 + 0.15, cx0 + 0.5, top + 0.04, top + 0.16, rz - 0.2, rz + 0.2, COUNTER_TOP, register);
+    const screen = slab(cx0 + 0.18, cx0 + 0.21, top + 0.18, top + 0.38, rz - 0.15, rz + 0.15, mat(0x0f1a26, { emissive: 0x1d3c5c, emissiveIntensity: 0.9 }), register);
+    screen.rotation.z = 0.25;
+    slab(cx0 + 0.22, cx0 + 0.26, top + 0.16, top + 0.22, rz - 0.02, rz + 0.02, COUNTER_TOP, register);
+    // Generous invisible target over the counter top
+    const proxy = slab(cx0 - 0.1, cx1, top, top + 0.5, zBack + 0.5, zIn, new THREE.MeshBasicMaterial({ visible: false }), register);
     proxy.castShadow = false;
     g.add(register);
 
-    // Clerk
+    // Clerk, facing the customer
     const clerk = new THREE.Group();
-    clerk.position.set(3.4, 0, 1.35);
+    clerk.position.set((cx1 + xIn) / 2, 0, rz);
+    clerk.rotation.y = -Math.PI / 2;
     slab(-0.18, 0.18, 0.85, 1.5, -0.12, 0.12, SHIRT, clerk);
     slab(-0.15, 0.15, 0, 0.85, -0.1, 0.1, COUNTER_TOP, clerk);
     slab(-0.1, 0.1, 1.5, 1.75, -0.1, 0.1, SKIN, clerk);
@@ -364,11 +346,8 @@ export class ConvenienceStore {
     slab(-0.11, 0.11, 1.72, 1.74, 0.1, 0.18, SHIRT, clerk); // brim
     g.add(clerk);
 
-    // Counter, plus a closed-off area behind it for the clerk
-    this.localWalls.push(
-      [[x0, z1], [x1, z1]], [[x0, z0], [x0, z1]], [[x1, z0], [x1, z1]],
-      [[x1, z0], [W / 2, z0]], [[x0, 0.6], [x0, z0]], [[x0, 0.6], [W / 2, 0.6]],
-    );
+    // Counter front and return, closing the clerk's corner off from the shop floor
+    this.localWalls.push([[cx0, zBack], [cx0, zIn]], [[cx0, zBack], [xIn, zBack]]);
   }
 
   #shopItem(kind, price, mesh, fixture) {

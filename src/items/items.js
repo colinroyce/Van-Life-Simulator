@@ -77,7 +77,11 @@ export class ItemSystem {
     this.stove = new Stove(van.body, LAYOUT.burner);
 
     this.filling = null;
-    this.using = null; // drinking or eating: { item, t, applied, animate, apply }
+    this.using = null;
+    // Something other than a hotbar item is in your hand (the fuel nozzle)
+    this.handOverride = false;
+    // Optional (fixture) => action for fixtures handled elsewhere (pump, fuel door, driver door)
+    this.extraAction = null; // drinking or eating: { item, t, applied, animate, apply }
 
     // The bottle starts full in the dash holder.
     this.#putInHolder(this.#newItem('bottle', { water: 1 }), this.holder('dash'));
@@ -112,7 +116,7 @@ export class ItemSystem {
   // { e, g, r }: what each key would do right now.
   actions() {
     const out = {};
-    const held = this.hotbar.held;
+    const held = this.handOverride ? null : this.hotbar.held;
     if (held?.kind === 'hotdog' && this.#buns()) out.r = { label: 'Put in bun', run: () => this.#putInBun(held) };
 
     const t = this.target;
@@ -131,6 +135,10 @@ export class ItemSystem {
 
   #primary(t, item, held) {
     const noop = (label) => ({ label, run: () => {} });
+
+    const extra = t.fixture && this.extraAction?.(t.fixture);
+    if (extra) return extra;
+    if (this.handOverride) return null;
 
     if (t.shop?.mesh.visible) {
       if (this.hotbar.full) return noop('Hands full');
@@ -197,7 +205,7 @@ export class ItemSystem {
   // Click: use whatever's in your hand.
   useHeld() {
     const held = this.hotbar.held;
-    if (!held || this.using) return;
+    if (!held || this.using || this.handOverride) return;
     const kind = KINDS[held.kind];
     if (held.kind === 'bottle') return this.#drink(held, true);
     if (kind.raw) return this.notify('Cook these first');
@@ -220,8 +228,8 @@ export class ItemSystem {
   update(dt, walking) {
     this.hand.visible = walking;
     const held = this.hotbar.held;
-    for (const slot of this.hotbar.slots) if (slot) slot.mesh.group.visible = slot === held;
-    this.fist.visible = !!held;
+    for (const slot of this.hotbar.slots) if (slot) slot.mesh.group.visible = slot === held && !this.handOverride;
+    this.fist.visible = !!held || this.handOverride;
 
     this.stove.update(dt);
     const fridgeOpen = this.van.buildout.fridgeOpen;

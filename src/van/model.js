@@ -45,6 +45,9 @@ const WIN_HIGH = 2.33;
 const CAB_WINDOW = [0.44, 2.0]; // front edge follows the A-pillar
 const CARGO_WINDOW = [-0.92, 0.27];
 const SLIDING_DOOR = [-1.0, 0.37]; // passenger side (-X), sill up to WIN_HIGH
+const DRIVER_DOOR = [0.37, 1.65]; // driver side (+X), from the B-pillar to past the window
+const DRIVER_DOOR_OPEN = -1.1; // swing (radians), hinged at its front edge
+const FUEL_NECK = new THREE.Vector3(1.0, 0.95, 0.05); // filler behind the driver door
 const WINDSHIELD = [0.97, 1.86];
 const REAR_WINDOWS = { x: [0.06, 0.84], y: [1.77, 2.35] };
 
@@ -102,7 +105,7 @@ function ring(z) {
 }
 
 function stationZs() {
-  const zs = new Set([CAB_WINDOW[0], ...CARGO_WINDOW, ...WINDSHIELD, ...SLIDING_DOOR]);
+  const zs = new Set([CAB_WINDOW[0], ...CARGO_WINDOW, ...WINDSHIELD, ...SLIDING_DOOR, ...DRIVER_DOOR]);
   for (const table of [TOP, BOTTOM, HALF_W, CORNER_R]) for (const [z] of table) zs.add(z);
   const phi0 = Math.acos((sample(BOTTOM, 0) - ARCH_Y) / ARCH_R);
   for (const axle of [VAN.frontAxleZ, VAN.rearAxleZ]) {
@@ -127,7 +130,11 @@ function isWindow(zMid, k0, k1) {
 const DOOR_EDGES = [R.winHighL, R.winLowL, R.winLowL + 1, R.winLowL + 2];
 const isDoorPanel = (zMid, k0, k1) =>
   k1 > k0 && zMid > SLIDING_DOOR[0] && zMid < SLIDING_DOOR[1] && k0 >= DOOR_EDGES[0] && k1 <= DOOR_EDGES[3];
-const isShellOpening = (zMid, k0, k1) => isWindow(zMid, k0, k1) || isDoorPanel(zMid, k0, k1);
+// Driver door covers the right half from the arch/sill up to the top of the window.
+const DRIVER_EDGES = [2, 3, R.winLow, R.winHigh];
+const isDriverDoor = (zMid, k0, k1) =>
+  k1 > k0 && zMid > DRIVER_DOOR[0] && zMid < DRIVER_DOOR[1] && k0 >= DRIVER_EDGES[0] && k1 <= DRIVER_EDGES[3];
+const isShellOpening = (zMid, k0, k1) => isWindow(zMid, k0, k1) || isDoorPanel(zMid, k0, k1) || isDriverDoor(zMid, k0, k1);
 
 // Van-local floor plan used for walking around (x, z in meters).
 export const LAYOUT = {
@@ -137,6 +144,8 @@ export const LAYOUT = {
   dashZ: 1.22,
   noseZ: 2.98,
   door: SLIDING_DOOR,
+  driverDoor: DRIVER_DOOR,
+  fuelNeck: FUEL_NECK,
   driverSeat: new THREE.Vector3(0.48, 0, 0.72),
   standUp: new THREE.Vector3(0, 0, 0.6), // between the seats
   // Solid boxes inside: [xMin, xMax, zMin, zMax]
@@ -413,8 +422,7 @@ function buildExterior(paint) {
   // Glass
   const windshield = [R.glassFrom, 8, 9, R.center, 11, 12, R.glassTo];
   g.add(new THREE.Mesh(glassGeometry(WINDSHIELD, windshield), GLASS));
-  g.add(new THREE.Mesh(glassGeometry(CAB_WINDOW, [R.winLow, R.winHigh]), GLASS));
-  g.add(new THREE.Mesh(glassGeometry(CAB_WINDOW, [R.winHighL, R.winLowL]), GLASS));
+  g.add(new THREE.Mesh(glassGeometry(CAB_WINDOW, [R.winHighL, R.winLowL]), GLASS)); // driver's is on the door
   g.add(new THREE.Mesh(glassGeometry(CARGO_WINDOW, [R.winLow, R.winHigh]), PRIVACY_GLASS));
 
   const flare = archFlare();
@@ -424,14 +432,17 @@ function buildExterior(paint) {
 
   for (const side of [1, -1]) {
     // Blacked-out B-pillar between the cab and cargo windows (passenger side: the rest is on the door)
-    const bFrom = side > 0 ? CARGO_WINDOW[1] : SLIDING_DOOR[1];
-    g.add(sideDecal([[bFrom, WIN_LOW], [CAB_WINDOW[0], WIN_LOW], [CAB_WINDOW[0], WIN_HIGH], [bFrom, WIN_HIGH]], side, TRIM_DECAL, 0.005));
-
-    // Front door seams + handle
-    g.add(sideLine([[1.56, 1.42], [1.54, 0.9]], side));
-    g.add(sideLine([[1.28, 0.47], [0.37, 0.47], [0.37, 1.44]], side));
+    // (the part over each door opening is on the door)
+    const [bFrom, bTo] = side > 0 ? [CARGO_WINDOW[1], DRIVER_DOOR[0]] : [SLIDING_DOOR[1], CAB_WINDOW[0]];
+    g.add(sideDecal([[bFrom, WIN_LOW], [bTo, WIN_LOW], [bTo, WIN_HIGH], [bFrom, WIN_HIGH]], side, TRIM_DECAL, 0.005));
     g.add(sideLine([[0.37, 2.34], [0.37, 2.38]], side));
-    g.add(box(0.03, 0.04, 0.16, TRIM, side * 1.02, 1.3, 0.58));
+
+    // Passenger front door seams + handle (the driver's door is a separate panel)
+    if (side < 0) {
+      g.add(sideLine([[1.56, 1.42], [1.54, 0.9]], side));
+      g.add(sideLine([[1.28, 0.47], [0.37, 0.47], [0.37, 1.44]], side));
+      g.add(box(0.03, 0.04, 0.16, TRIM, side * 1.02, 1.3, 0.58));
+    }
 
     // Wheel arch flares and rocker trim
     for (const axle of [VAN.frontAxleZ, VAN.rearAxleZ]) {
@@ -516,6 +527,66 @@ function buildExterior(paint) {
   g.add(box(0.32, 0.16, 0.02, PLATE, 0, 0.86, tail - 0.015));
 
   return g;
+}
+
+// Driver door, hinged at its front edge. Like the sliding door it's lofted from the shell's own
+// rings, so it fills the opening exactly when closed. Carries its window, trim and inside panel.
+function buildDriverDoor(paint) {
+  const [d0, d1] = DRIVER_DOOR;
+  const pivot = new THREE.Group();
+  pivot.position.set(VAN.halfWidth, 0, d1);
+  const g = new THREE.Group(); // door parts in body space, shifted so the pivot is the hinge
+  g.position.set(-VAN.halfWidth, 0, -d1);
+  pivot.add(g);
+  pivot.userData.fixture = 'driverDoor';
+
+  const skin = toGeometry(loft(ringsWithin(DRIVER_DOOR), DRIVER_EDGES, { skip: isWindow }));
+  const outer = new THREE.Mesh(skin, paint);
+  outer.castShadow = true;
+  outer.receiveShadow = true;
+  const inner = new THREE.Mesh(skin, LINING);
+  inner.receiveShadow = true;
+  g.add(outer, inner);
+  g.add(new THREE.Mesh(glassGeometry(CAB_WINDOW, [R.winLow, R.winHigh]), GLASS));
+  g.add(sideDecal([[d0, WIN_LOW], [CAB_WINDOW[0], WIN_LOW], [CAB_WINDOW[0], WIN_HIGH], [d0, WIN_HIGH]], 1, TRIM_DECAL, 0.005));
+  g.add(sideLine([[1.28, 0.47], [d0, 0.47], [d0, 1.44]], 1));
+  g.add(box(0.03, 0.04, 0.16, TRIM, 1.02, 1.3, 0.58)); // outside handle
+  g.add(buildDoorCard(1));
+  return pivot;
+}
+
+// Little flap over the filler, opening outward from its front edge.
+function buildFuelDoor(paint) {
+  const n = FUEL_NECK;
+  const g = new THREE.Group();
+  g.userData.fixture = 'fuelDoor';
+  // Recess with the filler neck, flat on the skin so the closed flap (x +0.008..+0.016) covers it
+  const recess = box(0.004, 0.15, 0.15, GRILLE, n.x + 0.002, n.y, n.z);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.003, 12), CHROME);
+  neck.rotation.z = Math.PI / 2;
+  neck.position.set(n.x + 0.0055, n.y, n.z);
+  const flapPivot = new THREE.Group();
+  flapPivot.position.set(n.x + 0.012, n.y, n.z + 0.085);
+  flapPivot.add(box(0.008, 0.16, 0.17, paint, 0, 0, -0.085));
+  // Easy-to-aim-at target around the flap
+  const proxy = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.3, 0.3), new THREE.MeshBasicMaterial({ visible: false }));
+  proxy.position.set(n.x + 0.04, n.y, n.z);
+  g.add(recess, neck, flapPivot, proxy);
+
+  // Green frame around the door, shown while you're looking right at it
+  const glow = new THREE.MeshBasicMaterial({ color: 0x3dff6e, transparent: true, depthTest: false, toneMapped: false });
+  const highlight = new THREE.Group();
+  highlight.visible = false;
+  const [hh, hw, t] = [0.1, 0.105, 0.01]; // half height, half width, bar thickness
+  for (const [y, z, h, w] of [[hh, 0, t, hw * 2 + t], [-hh, 0, t, hw * 2 + t], [0, hw, hh * 2, t], [0, -hw, hh * 2, t]]) {
+    const bar = new THREE.Mesh(new THREE.BoxGeometry(0.002, h, w), glow);
+    bar.position.set(n.x + 0.02, n.y + y, n.z + z);
+    bar.renderOrder = 10;
+    bar.userData.noAim = true;
+    highlight.add(bar);
+  }
+  g.add(highlight);
+  return { group: g, flap: flapPivot, highlight, glow };
 }
 
 // Passenger sliding door. Built from the same rings as the shell so it fills the
@@ -664,7 +735,8 @@ function buildInterior() {
   g.add(box(0.21, 0.05, 0.005, MIRROR, 0, 2.09, 0.939));
 
   for (const side of [1, -1]) {
-    g.add(buildDoorCard(side), buildSeat(side));
+    if (side < 0) g.add(buildDoorCard(side)); // the driver's is on the door
+    g.add(buildSeat(side));
     g.add(box(0.04, 0.08, 0.05, DASH_DARK, side * 0.9, 2.1, 0.38)); // seatbelt anchor
   }
   return g;
@@ -721,6 +793,13 @@ export class VanModel {
 
     this.driver = buildDriver();
     this.door = buildSlidingDoor(this.paint);
+    this.driverDoor = buildDriverDoor(this.paint);
+    this.driverDoorOpen = false;
+    this.driverDoorT = 0;
+    this.fuelDoor = buildFuelDoor(this.paint);
+    this.fuelDoorOpen = false;
+    this.fuelDoorT = 0;
+    this.body.add(this.driverDoor, this.fuelDoor.group);
     this.buildout = new Buildout();
     this.body.add(buildExterior(this.paint), buildInterior(), this.driver, this.door, this.buildout.group);
     this.lightsOn = false;
@@ -763,6 +842,28 @@ export class VanModel {
     return this.doorT > 0.85;
   }
 
+  setDriverDoorOpen(open) {
+    this.driverDoorOpen = open;
+  }
+
+  setFuelDoorOpen(open) {
+    this.fuelDoorOpen = open;
+  }
+
+  // Outline the fuel door (with a gentle pulse) while the player is aiming at it.
+  setFuelDoorHighlight(on, time = 0) {
+    this.fuelDoor.highlight.visible = on;
+    if (on) this.fuelDoor.glow.opacity = 0.65 + 0.35 * Math.sin(time * 6);
+  }
+
+  // The driver door as a wall segment (van space); it swings out when open.
+  driverDoorSegment() {
+    const a = this.driverDoor.rotation.y;
+    const [d0, d1] = DRIVER_DOOR;
+    const len = d1 - d0;
+    return [[VAN.halfWidth, d1], [VAN.halfWidth - len * Math.sin(a), d1 - len * Math.cos(a)]];
+  }
+
   setDoorOpen(open) {
     this.doorOpen = open;
   }
@@ -796,6 +897,11 @@ export class VanModel {
     const out = ease(THREE.MathUtils.clamp(this.doorT / 0.25, 0, 1));
     const back = ease(THREE.MathUtils.clamp((this.doorT - 0.2) / 0.8, 0, 1));
     this.door.position.set(-0.1 * out, 0, -1.32 * back);
+
+    this.driverDoorT = THREE.MathUtils.clamp(this.driverDoorT + (this.driverDoorOpen ? 1 : -1) * dt * 2, 0, 1);
+    this.driverDoor.rotation.y = DRIVER_DOOR_OPEN * ease(this.driverDoorT);
+    this.fuelDoorT = THREE.MathUtils.clamp(this.fuelDoorT + (this.fuelDoorOpen ? 1 : -1) * dt * 4, 0, 1);
+    this.fuelDoor.flap.rotation.y = -1.7 * ease(this.fuelDoorT);
   }
 
   #buildSteering() {

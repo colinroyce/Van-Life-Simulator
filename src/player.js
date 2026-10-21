@@ -65,6 +65,7 @@ function vanWalls(van) {
     ...LAYOUT.walls, // bathroom
     van.buildout.bathDoorSegment(),
     van.buildout.fridgeDoorSegment(),
+    van.driverDoorSegment(),
   ];
 }
 
@@ -89,6 +90,14 @@ export class Player {
   standUp(van) {
     this.#placeInside(van, LAYOUT.standUp, Math.PI, -0.15);
     this.eye = EYE_DUCK;
+    this.#placeCamera();
+  }
+
+  // Step out of the driver's door, standing beside the van facing away from it.
+  standOutside(van, localSpot, localHeading) {
+    this.#placeInside(van, localSpot, localHeading, -0.05);
+    this.inside = false;
+    this.floorY = 0;
     this.#placeCamera();
   }
 
@@ -157,34 +166,37 @@ export class Player {
     this.#placeCamera();
   }
 
+  // Van walls (in van space), then the world's walls and obstacles, twice over so being pushed
+  // by one can't shove you through the other.
   #collide(van, world, bounds) {
     van.root.updateMatrixWorld(true);
-    const p = van.root.worldToLocal(this.position.clone());
     const walls = vanWalls(van);
-    for (let i = 0; i < 2; i++) {
-      for (const [a, b] of walls) pushFromSegment(p, a, b, RADIUS);
-      for (const block of LAYOUT.blocks) pushFromBox(p, block, RADIUS);
-    }
-    this.inside = Math.abs(p.x) < LAYOUT.wallX && p.z > LAYOUT.rearZ && p.z < LAYOUT.noseZ;
-    this.local.copy(p);
-    this.position.copy(van.root.localToWorld(p));
-    this.position.y = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      const p = van.root.worldToLocal(this.position.clone());
+      for (let i = 0; i < 2; i++) {
+        for (const [a, b] of walls) pushFromSegment(p, a, b, RADIUS);
+        for (const block of LAYOUT.blocks) pushFromBox(p, block, RADIUS);
+      }
+      this.inside = Math.abs(p.x) < LAYOUT.wallX && p.z > LAYOUT.rearZ && p.z < LAYOUT.noseZ;
+      this.local.copy(p);
+      this.position.copy(van.root.localToWorld(p));
+      this.position.y = 0;
+      if (this.inside) return;
 
-    if (this.inside) return;
-    for (let i = 0; i < 2; i++) {
       for (const [a, b] of world.walls()) pushFromSegment(this.position, a, b, RADIUS);
+      for (const o of world.obstacles) {
+        const dx = this.position.x - o.x;
+        const dz = this.position.z - o.z;
+        const min = o.r + RADIUS;
+        const d = Math.hypot(dx, dz);
+        if (d >= min || d < 1e-6) continue;
+        this.position.x = o.x + (dx / d) * min;
+        this.position.z = o.z + (dz / d) * min;
+      }
+      this.position.x = clamp(this.position.x, -bounds, bounds);
+      this.position.z = clamp(this.position.z, -bounds, bounds);
     }
-    for (const o of world.obstacles) {
-      const dx = this.position.x - o.x;
-      const dz = this.position.z - o.z;
-      const min = o.r + RADIUS;
-      const d = Math.hypot(dx, dz);
-      if (d >= min || d < 1e-6) continue;
-      this.position.x = o.x + (dx / d) * min;
-      this.position.z = o.z + (dz / d) * min;
-    }
-    this.position.x = clamp(this.position.x, -bounds, bounds);
-    this.position.z = clamp(this.position.z, -bounds, bounds);
+    this.local.copy(van.root.worldToLocal(this.position.clone()));
   }
 
   // What E would do right now, or null. Picks the nearby thing you're most facing.

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { HULL } from './van/physics.js';
 import { ConvenienceStore } from './places/store.js';
+import { FuelStation } from './places/fuelStation.js';
 
 export const BOUNDS = 190;
 export const SPAWN = { position: new THREE.Vector3(0, 0, -60), yaw: 0 };
@@ -9,6 +10,7 @@ const PAD = { halfX: 30, halfZ: 80 };
 // Paved lot off the east side of the pad, with the convenience store on it
 const LOT = { x0: 30, x1: 66, z0: 18, z1: 62 };
 const STORE = { x: 57, z: 40, facing: -Math.PI / 2 }; // front faces the pad (-X)
+const PUMPS = { x: 42, z: 40, facing: 0 }; // island runs north-south; hose side faces west
 
 const mat = (color, opts = {}) =>
   new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, ...opts });
@@ -211,7 +213,11 @@ export class World {
     this.store = new ConvenienceStore();
     this.store.place(scene, STORE.x, STORE.z, STORE.facing);
     this.obstacles.push(...this.store.vanObstacles());
-    this.surfaces = [ground, pad, lot, this.store.group]; // things you can aim at and set items down on
+    this.fuelStation = new FuelStation();
+    this.fuelStation.place(scene, PUMPS.x, PUMPS.z, PUMPS.facing);
+    this.obstacles.push(...this.fuelStation.obstacles());
+    // things you can aim at and set items down on
+    this.surfaces = [ground, pad, lot, this.store.group, this.fuelStation.group];
 
     const onLot = (x, z, margin) => x > LOT.x0 - margin && x < LOT.x1 + margin && z > LOT.z0 - margin && z < LOT.z1 + margin;
     const onPad = (x, z, margin) =>

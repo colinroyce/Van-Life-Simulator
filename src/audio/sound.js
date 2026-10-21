@@ -32,6 +32,8 @@ export class GameAudio {
     this.prevLying = false;
     this.prevBathDoor = false;
     this.prevFridge = false;
+    this.prevDriverDoor = false;
+    this.prevFuelDoor = false;
   }
 
   // Browsers only allow audio after a user gesture, so this is called from input handlers.
@@ -67,6 +69,7 @@ export class GameAudio {
     this.#buildShower();
     this.#buildFaucet();
     this.#buildSizzle();
+    this.#buildPump();
   }
 
   // One-shots can be triggered straight from gameplay, possibly before audio is unlocked.
@@ -178,6 +181,15 @@ export class GameAudio {
     this.popTimer = 0;
   }
 
+  // Fuel pump motor and the rush of fuel
+  #buildPump() {
+    const ctx = this.ctx;
+    this.pumpHum = S.gain(ctx, 0);
+    S.chain(S.osc(ctx, 'sawtooth', 118), S.filter(ctx, 'lowpass', 400, 1), S.gain(ctx, 0.5), this.pumpHum);
+    S.chain(S.loop(ctx, this.brown), S.filter(ctx, 'bandpass', 700, 0.8), this.pumpHum);
+    this.pumpHum.connect(this.outside);
+  }
+
   // Called every frame with a snapshot of the game.
   update(dt, st) {
     if (!this.ctx || this.ctx.state !== 'running') return;
@@ -195,6 +207,7 @@ export class GameAudio {
     S.glide(ctx, this.horn.gain, st.horn ? 0.32 : 0, 0.01);
     S.glide(ctx, this.shower.gain, st.showerOn ? 0.12 : 0, 0.15);
     S.glide(ctx, this.faucet.gain, st.faucetOn ? 0.1 : 0, 0.08);
+    S.glide(ctx, this.pumpHum.gain, st.pumping ? 0.08 : 0, 0.1);
     S.glide(ctx, this.sizzle.gain, st.sizzle * (st.burning ? 0.09 : 0.06), 0.2);
     this.popTimer -= dt;
     if (st.sizzle > 0 && this.popTimer <= 0) {
@@ -297,6 +310,10 @@ export class GameAudio {
     if (st.bathDoorOpen !== this.prevBathDoor) this.bathDoor(st.bathDoorOpen);
     if (st.fridgeOpen !== this.prevFridge) this.fridgeDoor(st.fridgeOpen);
     this.prevFridge = st.fridgeOpen;
+    if (st.driverDoorOpen !== this.prevDriverDoor) this.carDoor(st.driverDoorOpen);
+    if (st.fuelDoorOpen !== this.prevFuelDoor) this.switchClick();
+    this.prevDriverDoor = st.driverDoorOpen;
+    this.prevFuelDoor = st.fuelDoorOpen;
     this.prevBathDoor = st.bathDoorOpen;
     if (st.lightsOn !== this.prevLights) this.switchClick();
     if (st.lying !== this.prevLying) this.rustle();
@@ -385,6 +402,16 @@ export class GameAudio {
     S.toneHit(ctx, out, { type: 'triangle', freq: 180, freqEnd: 90, peak: 0.05, attack: 0.05, decay: 0.6, delay: 1.0 }); // gurgle
   }
 
+  // Latch on open; a solid thunk when it shuts
+  carDoor(opening) {
+    const { ctx, direct: out, white } = this;
+    S.noiseHit(ctx, out, white, { freq: 2800, q: 2, peak: 0.15, decay: 0.03 });
+    if (!opening) {
+      S.toneHit(ctx, out, { freq: 95, freqEnd: 50, peak: 0.5, decay: 0.2, delay: 0.42 });
+      S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 1000, peak: 0.35, decay: 0.12, delay: 0.42 });
+    }
+  }
+
   // Seal letting go on open, soft thump on close
   fridgeDoor(opening) {
     const { ctx, direct: out, white } = this;
@@ -405,13 +432,26 @@ export class GameAudio {
     }
   }
 
-  // Register bell and the cash drawer
+  // Old-fashioned cash register "cha-ching": key clacks, the drawer shooting open ("cha"), the
+  // bell ("ching", a bright inharmonic ring) and a few coins rattling in the drawer.
   kaching() {
     if (!this.#ready) return;
     const { ctx, direct: out, white } = this;
-    S.toneHit(ctx, out, { freq: 1320, peak: 0.12, decay: 0.5 });
-    S.toneHit(ctx, out, { freq: 1760, peak: 0.1, decay: 0.6, delay: 0.08 });
-    S.noiseHit(ctx, out, white, { type: 'lowpass', freq: 1500, peak: 0.12, decay: 0.15, delay: 0.15 });
+    for (const delay of [0, 0.07]) {
+      S.noiseHit(ctx, out, white, { freq: 2200, q: 2, peak: 0.7, decay: 0.03, delay });
+      S.toneHit(ctx, out, { type: 'square', freq: 520, freqEnd: 300, peak: 0.12, decay: 0.035, delay });
+    }
+    // "cha": the drawer sliding out and hitting its stop
+    S.noiseHit(ctx, out, white, { freq: 1400, q: 0.8, peak: 0.35, attack: 0.01, decay: 0.12, delay: 0.16, sweepTo: 700 });
+    S.toneHit(ctx, out, { freq: 160, freqEnd: 90, peak: 0.3, decay: 0.08, delay: 0.27 });
+    // "ching": bell partials ringing out
+    for (const [freq, peak, decay] of [[2093, 0.22, 1.4], [2637, 0.14, 1.1], [3520, 0.1, 0.8], [5274, 0.06, 0.5]]) {
+      S.toneHit(ctx, out, { freq, peak, attack: 0.003, decay, delay: 0.2 });
+    }
+    // coins
+    for (let i = 0; i < 5; i++) {
+      S.toneHit(ctx, out, { type: 'triangle', freq: 3800 + Math.random() * 2400, peak: 0.04, decay: 0.06, delay: 0.32 + i * 0.045 + Math.random() * 0.02 });
+    }
   }
 
   // Two swallows
