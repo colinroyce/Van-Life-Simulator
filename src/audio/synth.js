@@ -1,4 +1,4 @@
-// Small Web Audio building blocks. Every sound in the game is synthesized; no audio files.
+// Small Web Audio building blocks. Every sound effect in the game is synthesized (only the radio plays files).
 
 export function noiseBuffer(ctx, seconds = 2, color = 'white') {
   const length = Math.floor(ctx.sampleRate * seconds);

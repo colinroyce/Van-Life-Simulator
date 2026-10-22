@@ -81,7 +81,7 @@ export class CameraRig {
     this.chaseYaw += wrapAngle(sim.yaw - this.chaseYaw) * (1 - Math.exp(-3 * dt));
     this.#placeChase(sim, 1 - Math.exp(-10 * dt));
 
-    const fov = 62 + Math.min(Math.abs(sim.speed), 31) * 0.35;
+    const fov = 62 + Math.min(Math.abs(sim.speed), 45) * 0.35;
     if (Math.abs(this.chase.fov - fov) > 0.01) {
       this.chase.fov = fov;
       this.chase.updateProjectionMatrix();

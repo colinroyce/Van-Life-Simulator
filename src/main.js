@@ -18,6 +18,7 @@ import { HygieneThoughts } from './ui/thoughts.js';
 import { Hotbar } from './items/hotbar.js';
 import { ItemSystem, describeItem } from './items/items.js';
 import { Fueling } from './items/fueling.js';
+import { Radio } from './audio/radio.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -55,6 +56,7 @@ const mapView = world.route && new MapView(document.getElementById('map-view'), 
 const gps = world.route && new Gps(world.route, world.destination, [{ x: 42, z: 40, icon: '⛽' }]);
 const player = new Player(window.innerWidth / window.innerHeight);
 const audio = new GameAudio();
+const radio = new Radio(audio);
 const needs = new Needs();
 const clock = new GameClock(8);
 const sleepWheel = new SleepWheel(document.getElementById('sleep-wheel'));
@@ -66,7 +68,12 @@ const fueling = new Fueling({ scene, station: world.fuelStation, van, items, nee
 items.extraAction = (fixture) => {
   if (fixture === 'driverDoor') {
     if (!van.driverDoorOpen) return { label: 'Open driver door', run: () => van.setDriverDoorOpen(true) };
-    return { label: 'Get in', run: () => sitDown(), alt: { key: 'Q', label: 'Close door', run: () => van.setDriverDoorOpen(false) } };
+    return { label: 'Close driver door', run: () => van.setDriverDoorOpen(false) };
+  }
+  // Look at the seat itself to sit back down (through the open door, or from inside)
+  if (fixture === 'driverSeat') {
+    if (!player.inside && !van.driverDoorOpen) return null;
+    return { label: player.inside ? 'Drive' : 'Get in', run: () => sitDown() };
   }
   return fueling.action(fixture);
 };
@@ -74,7 +81,7 @@ items.extraAction = (fixture) => {
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, radio, get mode() { return mode; } };
 
 function reset(pose = world.spawn) {
   sim.reset(pose.position, pose.yaw);
@@ -181,14 +188,27 @@ function sitDown() {
 
 const busy = () => fade.active || sleepWheel.isOpen || mapView?.isOpen;
 
-// The rolled-up road map on the passenger seat: look at it from the driver's seat and press E.
-const MAP_AIM = 0.35; // radians off-center that still counts as looking at it
-function lookingAtMap() {
-  if (!mapView || cameras.mode !== 'cockpit') return false;
+// Things you can reach from the driver's seat by looking at them: the rolled-up road map on the
+// passenger seat and the radio below the center vents. Returns whichever you're looking at.
+const SEAT_REACH = [
+  { what: 'map', object: () => van.roadMap, aim: 0.35 },
+  { what: 'radio', object: () => van.radioUnit, aim: 0.2 },
+];
+function lookingAt() {
+  if (cameras.mode !== 'cockpit') return null;
   const eye = cameras.cockpit.getWorldPosition(new THREE.Vector3());
   const look = cameras.cockpit.getWorldDirection(new THREE.Vector3());
-  const to = van.roadMap.getWorldPosition(new THREE.Vector3()).sub(eye);
-  return look.angleTo(to) < MAP_AIM;
+  let best = null;
+  let bestAngle = Infinity;
+  for (const r of SEAT_REACH) {
+    if (r.what === 'map' && !mapView) continue;
+    const angle = look.angleTo(r.object().getWorldPosition(new THREE.Vector3()).sub(eye));
+    if (angle < r.aim && angle < bestAngle) {
+      best = r.what;
+      bestAngle = angle;
+    }
+  }
+  return best;
 }
 
 function openMap() {
@@ -269,7 +289,9 @@ onKey('KeyE', () => {
   if (mode === 'drive') {
     const drink = cameras.mode === 'cockpit' && items.cockpitAction(cameras.cockpit);
     if (drink) return drink.run();
-    if (lookingAtMap()) return openMap();
+    const reach = lookingAt();
+    if (reach === 'map') return openMap();
+    if (reach === 'radio') return flashCamLabel(radio.nextStation());
     return canGetOutDriverSide() ? getOutDriverSide() : getUp();
   }
   const itemAction = items.actions().e;
@@ -285,7 +307,11 @@ onKey('KeyE', () => {
   if (action === 'sleep') openSleepWheel();
 });
 onKey('KeyQ', () => {
-  if (busy() || mode !== 'walk') return;
+  if (busy()) return;
+  if (mode === 'drive') {
+    if (lookingAt() === 'radio' && radio.on) flashCamLabel(radio.skip());
+    return;
+  }
   if (player.lying) return player.getOutOfBed(van);
   items.actions().e?.alt?.run();
 });
@@ -425,10 +451,16 @@ function tick(dt) {
     hud.gear.textContent = sim.gear;
     const drink = cockpit && items.cockpitAction(cameras.cockpit);
     const stopped = Math.abs(sim.speed) <= 0.5;
-    const map = !drink && lookingAtMap();
-    hud.prompt.hidden = (!drink && !map && !stopped) || busy();
+    const reach = !drink && lookingAt();
+    hud.prompt.hidden = (!drink && !reach && !stopped) || busy();
     const getUpLabel = canGetOutDriverSide() ? 'Get out' : 'Get up';
-    hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : map ? 'Look at map' : getUpLabel}`;
+    if (reach === 'radio') {
+      hud.prompt.innerHTML = radio.on
+        ? '<kbd>E</kbd> Next station &nbsp; <kbd>Q</kbd> Skip song'
+        : '<kbd>E</kbd> Turn on radio';
+    } else {
+      hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : reach === 'map' ? 'Look at map' : getUpLabel}`;
+    }
     hud.crosshair.hidden = !(cockpit && isPointerLocked());
     hud.heldHint.textContent = '';
     hud.lookHint.hidden = true;
@@ -470,7 +502,11 @@ function tick(dt) {
   renderNeeds();
   showConsequences();
 
+  radio.update(dt);
+  van.setRadioDisplay(radio.on ? radio.material : null);
+
   audio.update(dt, {
+    vanDistance: walking ? player.position.distanceTo(sim.position) : 0,
     listener: walking ? (player.inside ? 'inside' : 'outside') : cameras.mode,
     engineOn: engineRunning,
     rpm: sim.rpm,

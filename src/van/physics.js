@@ -3,7 +3,7 @@ import { VAN } from './model.js';
 
 // Arcade handling tuned to feel like a heavy, top-heavy van.
 const TUNING = {
-  maxSpeed: 31, // m/s (~70 mph)
+  maxSpeed: 53.6, // m/s (120 mph)
   maxReverse: 7,
   engineAccel: 3.8, // ~0-60 mph in 10s
   reverseAccel: 3,
