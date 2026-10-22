@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import { VanModel } from './van/model.js';
 import { VanSim } from './van/physics.js';
-import { World, BOUNDS, SPAWN, createEnvironment } from './world.js';
+import { World, createEnvironment } from './world.js';
+import { RoadTripWorld } from './map/roadTrip.js';
+import { Gps } from './ui/gps.js';
+import { MapView } from './ui/mapView.js';
 import { CameraRig } from './cameras.js';
 import { readDriveInput, readWalkInput, takeMouseDelta, isPointerLocked, onKey, onLockedClick, onScroll } from './input.js';
 import { Player } from './player.js';
@@ -15,6 +18,7 @@ import { HygieneThoughts } from './ui/thoughts.js';
 import { Hotbar } from './items/hotbar.js';
 import { ItemSystem, describeItem } from './items/items.js';
 import { Fueling } from './items/fueling.js';
+import { Radio } from './audio/radio.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -27,7 +31,8 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.fog = new THREE.Fog(0xd8ecf5, 120, 650);
 
-scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x5f7f45, 1.3));
+const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x5f7f45, 1.3);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
 const SUN_DIR = new THREE.Vector3(40, 70, 25);
 sun.castShadow = true;
@@ -37,14 +42,21 @@ sun.shadow.bias = -0.0005;
 sun.shadow.normalBias = 0.02;
 scene.add(sun, sun.target);
 
-const world = new World(scene);
+// The road trip by default; ?sandbox loads the flat test pad.
+const sandbox = new URLSearchParams(location.search).has('sandbox');
+const world = sandbox ? new World(scene) : new RoadTripWorld(scene);
 const van = new VanModel();
 van.setEnvironment(createEnvironment(renderer));
 scene.add(van.root);
 const sim = new VanSim();
+sim.ground = (x, z) => world.groundHeight(x, z);
 const cameras = new CameraRig(van);
+cameras.ground = sim.ground;
+const mapView = world.route && new MapView(document.getElementById('map-view'), world.route, world.destination);
+const gps = world.route && new Gps(world.route, world.destination, [{ x: 42, z: 40, icon: '⛽' }]);
 const player = new Player(window.innerWidth / window.innerHeight);
 const audio = new GameAudio();
+const radio = new Radio(audio);
 const needs = new Needs();
 const clock = new GameClock(8);
 const sleepWheel = new SleepWheel(document.getElementById('sleep-wheel'));
@@ -56,7 +68,12 @@ const fueling = new Fueling({ scene, station: world.fuelStation, van, items, nee
 items.extraAction = (fixture) => {
   if (fixture === 'driverDoor') {
     if (!van.driverDoorOpen) return { label: 'Open driver door', run: () => van.setDriverDoorOpen(true) };
-    return { label: 'Get in', run: () => sitDown(), alt: { key: 'Q', label: 'Close door', run: () => van.setDriverDoorOpen(false) } };
+    return { label: 'Close driver door', run: () => van.setDriverDoorOpen(false) };
+  }
+  // Look at the seat itself to sit back down (through the open door, or from inside)
+  if (fixture === 'driverSeat') {
+    if (!player.inside && !van.driverDoorOpen) return null;
+    return { label: player.inside ? 'Drive' : 'Get in', run: () => sitDown() };
   }
   return fueling.action(fixture);
 };
@@ -64,10 +81,10 @@ items.extraAction = (fixture) => {
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, radio, get mode() { return mode; } };
 
-function reset() {
-  sim.reset(SPAWN.position, SPAWN.yaw);
+function reset(pose = world.spawn) {
+  sim.reset(pose.position, pose.yaw);
   world.resetCones();
   van.sync(sim);
   cameras.snap(sim);
@@ -169,7 +186,44 @@ function sitDown() {
   setMode('drive');
 }
 
-const busy = () => fade.active || sleepWheel.isOpen;
+const busy = () => fade.active || sleepWheel.isOpen || mapView?.isOpen;
+
+// Things you can reach from the driver's seat by looking at them: the rolled-up road map on the
+// passenger seat and the radio below the center vents. Returns whichever you're looking at.
+const SEAT_REACH = [
+  { what: 'map', object: () => van.roadMap, aim: 0.35 },
+  { what: 'radio', object: () => van.radioUnit, aim: 0.2 },
+];
+function lookingAt() {
+  if (cameras.mode !== 'cockpit') return null;
+  const eye = cameras.cockpit.getWorldPosition(new THREE.Vector3());
+  const look = cameras.cockpit.getWorldDirection(new THREE.Vector3());
+  let best = null;
+  let bestAngle = Infinity;
+  for (const r of SEAT_REACH) {
+    if (r.what === 'map' && !mapView) continue;
+    const angle = look.angleTo(r.object().getWorldPosition(new THREE.Vector3()).sub(eye));
+    if (angle < r.aim && angle < bestAngle) {
+      best = r.what;
+      bestAngle = angle;
+    }
+  }
+  return best;
+}
+
+function openMap() {
+  if (isPointerLocked()) document.exitPointerLock();
+  mapView.open(sim.position, world.locate(sim.position.x, sim.position.z).s);
+}
+
+// Cruise control: holds the speed you set it at; braking (or X again) turns it off.
+let cruiseSpeed = 0;
+function setCruise(speed) {
+  cruiseSpeed = speed;
+  const label = document.getElementById('cruise');
+  label.hidden = !speed;
+  label.textContent = speed ? `CRUISE ${Math.round(speed * 2.23694)}` : '';
+}
 
 function openSleepWheel() {
   if (isPointerLocked()) document.exitPointerLock();
@@ -230,10 +284,14 @@ function takeShower() {
 
 onKey('KeyE', () => {
   if (fade.active) return;
+  if (mapView?.isOpen) return mapView.close();
   if (sleepWheel.isOpen) return sleep(sleepWheel.hours);
   if (mode === 'drive') {
     const drink = cameras.mode === 'cockpit' && items.cockpitAction(cameras.cockpit);
     if (drink) return drink.run();
+    const reach = lookingAt();
+    if (reach === 'map') return openMap();
+    if (reach === 'radio') return flashCamLabel(radio.nextStation());
     return canGetOutDriverSide() ? getOutDriverSide() : getUp();
   }
   const itemAction = items.actions().e;
@@ -249,11 +307,24 @@ onKey('KeyE', () => {
   if (action === 'sleep') openSleepWheel();
 });
 onKey('KeyQ', () => {
-  if (busy() || mode !== 'walk') return;
+  if (busy()) return;
+  if (mode === 'drive') {
+    if (lookingAt() === 'radio' && radio.on) flashCamLabel(radio.skip());
+    return;
+  }
   if (player.lying) return player.getOutOfBed(van);
   items.actions().e?.alt?.run();
 });
-onKey('Escape', () => sleepWheel.isOpen && sleepWheel.close());
+onKey('Escape', () => {
+  if (sleepWheel.isOpen) sleepWheel.close();
+  if (mapView?.isOpen) mapView.close();
+});
+onKey('KeyX', () => {
+  if (mode !== 'drive' || busy()) return;
+  if (cruiseSpeed) return setCruise(0);
+  if (sim.speed < 4) return flashCamLabel('Get up to speed to set cruise');
+  setCruise(sim.speed);
+});
 for (const [code, delta] of [['KeyA', -1], ['ArrowLeft', -1], ['KeyD', 1], ['ArrowRight', 1]]) {
   onKey(code, () => sleepWheel.isOpen && sleepWheel.adjust(delta));
 }
@@ -262,7 +333,7 @@ onKey('KeyG', () => {
 });
 for (let i = 0; i < hotbar.slots.length; i++) onKey(`Digit${i + 1}`, () => mode === 'walk' && hotbar.select(i));
 onKey('KeyR', () => {
-  if (mode === 'drive') return reset();
+  if (mode === 'drive') return reset(world.resetPose(sim.position));
   if (!busy()) items.actions().r?.run();
 });
 onScroll((dir) => {
@@ -317,6 +388,18 @@ function showConsequences() {
   hygieneThoughts.update(needs.values.hygiene);
 }
 
+// Weather for where you are on the trip (the sandbox keeps its fixed sky).
+function applyAtmosphere(a) {
+  if (!a) return;
+  scene.fog.color.copy(a.horizon);
+  scene.fog.near = a.fogNear;
+  scene.fog.far = a.fogFar;
+  hemi.color.copy(a.hemiSky);
+  hemi.groundColor.copy(a.hemiGround);
+  hemi.intensity = a.hemi;
+  sun.intensity = a.sun;
+}
+
 // --- loop ---
 const frameClock = new THREE.Clock();
 const STEP = 1 / 120;
@@ -325,6 +408,10 @@ let acc = 0;
 function tick(dt) {
   const mouse = takeMouseDelta();
   const driveInput = readDriveInput();
+  if (cruiseSpeed) {
+    if (driveInput.brake || driveInput.handbrake || mode !== 'drive' || needs.values.fuel <= 0) setCruise(0);
+    else if (!driveInput.throttle) driveInput.throttle = sim.speed < cruiseSpeed ? 1 : 0;
+  }
   let impact = 0;
   let coneHit = 0;
 
@@ -343,7 +430,7 @@ function tick(dt) {
     acc += dt;
     while (acc >= STEP) {
       sim.update(STEP, engineRunning ? driveInput : coasting);
-      impact = Math.max(impact, sim.collide(world.obstacles, BOUNDS));
+      impact = Math.max(impact, sim.collide(world.obstaclesNear(sim.position.x, sim.position.z)), world.constrainVan(sim));
       coneHit = Math.max(coneHit, world.update(STEP, sim));
       acc -= STEP;
     }
@@ -364,9 +451,16 @@ function tick(dt) {
     hud.gear.textContent = sim.gear;
     const drink = cockpit && items.cockpitAction(cameras.cockpit);
     const stopped = Math.abs(sim.speed) <= 0.5;
-    hud.prompt.hidden = !drink && !stopped;
+    const reach = !drink && lookingAt();
+    hud.prompt.hidden = (!drink && !reach && !stopped) || busy();
     const getUpLabel = canGetOutDriverSide() ? 'Get out' : 'Get up';
-    hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : getUpLabel}`;
+    if (reach === 'radio') {
+      hud.prompt.innerHTML = radio.on
+        ? '<kbd>E</kbd> Next station &nbsp; <kbd>Q</kbd> Skip song'
+        : '<kbd>E</kbd> Turn on radio';
+    } else {
+      hud.prompt.innerHTML = `<kbd>E</kbd> ${drink ? drink.label : reach === 'map' ? 'Look at map' : getUpLabel}`;
+    }
     hud.crosshair.hidden = !(cockpit && isPointerLocked());
     hud.heldHint.textContent = '';
     hud.lookHint.hidden = true;
@@ -375,7 +469,7 @@ function tick(dt) {
     van.setFuelDoorHighlight(false);
   } else {
     const still = { forward: 0, strafe: 0, turn: 0, run: false };
-    player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world, BOUNDS);
+    player.update(dt, busy() ? still : readWalkInput(), busy() ? { x: 0, y: 0 } : mouse, van, world);
     camera = player.camera;
     focus = player.position;
     items.aim(player.camera);
@@ -408,7 +502,11 @@ function tick(dt) {
   renderNeeds();
   showConsequences();
 
+  radio.update(dt);
+  van.setRadioDisplay(radio.on ? radio.material : null);
+
   audio.update(dt, {
+    vanDistance: walking ? player.position.distanceTo(sim.position) : 0,
     listener: walking ? (player.inside ? 'inside' : 'outside') : cameras.mode,
     engineOn: engineRunning,
     rpm: sim.rpm,
@@ -441,6 +539,15 @@ function tick(dt) {
 
   sun.target.position.copy(focus);
   sun.position.copy(focus).add(SUN_DIR);
+  applyAtmosphere(world.frame(focus, camera));
+
+  // The GPS lives on the dash touchscreen: on with the engine, drawn while you can see it
+  if (gps && engineRunning) {
+    van.setScreen(gps.material);
+    if (cameras.mode === 'cockpit') gps.update(dt, sim, world.locate(sim.position.x, sim.position.z));
+  } else {
+    van.setScreen(null);
+  }
 
   renderer.render(scene, camera);
 }

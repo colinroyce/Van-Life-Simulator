@@ -71,9 +71,9 @@ function vanWalls(van) {
 
 export class Player {
   constructor(aspect) {
-    this.camera = new THREE.PerspectiveCamera(75, aspect, 0.05, 3000);
+    this.camera = new THREE.PerspectiveCamera(75, aspect, 0.05, 9000);
     this.camera.rotation.order = 'YXZ';
-    this.position = new THREE.Vector3(); // feet, world space
+    this.position = new THREE.Vector3(); // feet, world space (y: ground under you, or the van's base inside)
     this.heading = 0; // same convention as the van's yaw: 0 looks along +Z
     this.pitch = 0;
     this.floorY = 0;
@@ -98,6 +98,7 @@ export class Player {
     this.#placeInside(van, localSpot, localHeading, -0.05);
     this.inside = false;
     this.floorY = 0;
+    if (this.ground) this.position.y = this.ground(this.position.x, this.position.z);
     this.#placeCamera();
   }
 
@@ -119,9 +120,8 @@ export class Player {
 
   #placeInside(van, localSpot, localHeading, pitch) {
     van.root.updateMatrixWorld(true);
-    this.local.copy(localSpot);
+    this.local.copy(localSpot).setY(0);
     this.position.copy(van.root.localToWorld(this.local.clone()));
-    this.position.y = 0;
     this.heading = van.root.rotation.y + localHeading;
     this.pitch = pitch;
     this.inside = true;
@@ -129,7 +129,8 @@ export class Player {
     this.eye = EYE;
   }
 
-  update(dt, input, mouse, van, world, bounds) {
+  update(dt, input, mouse, van, world) {
+    this.ground = (x, z) => world.groundHeight(x, z);
     this.heading -= mouse.x * LOOK_SENSITIVITY;
     this.heading += input.turn * TURN_RATE * dt;
     const [minPitch, maxPitch] = this.lying ? [-0.4, 1.3] : [-1.45, 1.45];
@@ -155,7 +156,7 @@ export class Player {
     this.position.x += mx * speed * dt;
     this.position.z += mz * speed * dt;
 
-    this.#collide(van, world, bounds);
+    this.#collide(van, world);
     this.moved = Math.hypot(this.position.x - startX, this.position.z - startZ);
     this.running = input.run;
 
@@ -168,11 +169,12 @@ export class Player {
 
   // Van walls (in van space), then the world's walls and obstacles, twice over so being pushed
   // by one can't shove you through the other.
-  #collide(van, world, bounds) {
+  #collide(van, world) {
     van.root.updateMatrixWorld(true);
     const walls = vanWalls(van);
+    const obstacles = world.obstaclesNear(this.position.x, this.position.z);
     for (let pass = 0; pass < 2; pass++) {
-      const p = van.root.worldToLocal(this.position.clone());
+      const p = van.root.worldToLocal(this.position.clone()).setY(0);
       for (let i = 0; i < 2; i++) {
         for (const [a, b] of walls) pushFromSegment(p, a, b, RADIUS);
         for (const block of LAYOUT.blocks) pushFromBox(p, block, RADIUS);
@@ -180,11 +182,10 @@ export class Player {
       this.inside = Math.abs(p.x) < LAYOUT.wallX && p.z > LAYOUT.rearZ && p.z < LAYOUT.noseZ;
       this.local.copy(p);
       this.position.copy(van.root.localToWorld(p));
-      this.position.y = 0;
       if (this.inside) return;
 
       for (const [a, b] of world.walls()) pushFromSegment(this.position, a, b, RADIUS);
-      for (const o of world.obstacles) {
+      for (const o of obstacles) {
         const dx = this.position.x - o.x;
         const dz = this.position.z - o.z;
         const min = o.r + RADIUS;
@@ -193,10 +194,10 @@ export class Player {
         this.position.x = o.x + (dx / d) * min;
         this.position.z = o.z + (dz / d) * min;
       }
-      this.position.x = clamp(this.position.x, -bounds, bounds);
-      this.position.z = clamp(this.position.z, -bounds, bounds);
+      world.constrainWalker(this.position);
+      this.position.y = world.groundHeight(this.position.x, this.position.z);
     }
-    this.local.copy(van.root.worldToLocal(this.position.clone()));
+    this.local.copy(van.root.worldToLocal(this.position.clone())).setY(0);
   }
 
   // What E would do right now, or null. Picks the nearby thing you're most facing.
@@ -265,7 +266,7 @@ export class Player {
 
   #placeCamera() {
     if (this.lying) this.camera.position.copy(this.headPos);
-    else this.camera.position.set(this.position.x, this.floorY + this.eye, this.position.z);
+    else this.camera.position.set(this.position.x, this.position.y + this.floorY + this.eye, this.position.z);
     this.camera.rotation.set(this.pitch, this.heading + Math.PI, 0);
   }
 }

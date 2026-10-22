@@ -61,6 +61,10 @@ export class GameAudio {
     this.engineFilter = S.filter(ctx, 'lowpass', 7000, 0.7);
     this.engineBus = S.gain(ctx, 1); // engine and tire roar
     S.chain(this.engineBus, this.engineFilter, this.master);
+    this.cabinFilter = S.filter(ctx, 'lowpass', 20000, 0.5);
+    this.cabinLevel = S.gain(ctx, 1);
+    this.cabin = S.gain(ctx, 1); // things inside the van heard from wherever you are (the radio)
+    S.chain(this.cabin, this.cabinFilter, this.cabinLevel, this.master);
 
     this.#buildEngine();
     this.#buildRoad();
@@ -201,6 +205,12 @@ export class GameAudio {
     if (st.listener === 'inside') outsideCut = 900 + (20000 - 900) * st.doorT ** 2;
     S.glide(ctx, this.outsideFilter.frequency, outsideCut, 0.08);
     S.glide(ctx, this.engineFilter.frequency, m.engine, 0.08);
+    // The cabin through the van's walls: clear inside, muffled (more so the further away) outside
+    const open = Math.max(st.doorT, st.driverDoorOpen ? 1 : 0);
+    const outsideVan = st.listener === 'outside'; // the chase camera hears it like the driver does
+    const away = outsideVan ? 1 / (1 + Math.max((st.vanDistance ?? 0) - 1.5, 0) * 0.35) : 1;
+    S.glide(ctx, this.cabinFilter.frequency, outsideVan ? 900 + 9000 * open : 20000, 0.08);
+    S.glide(ctx, this.cabinLevel.gain, outsideVan ? (0.35 + 0.45 * open) * away : 1, 0.08);
 
     this.#updateEngine(dt, st);
     this.#updateRoad(st);
@@ -277,9 +287,9 @@ export class GameAudio {
     const r = this.road;
     const v = Math.abs(st.speed);
     const onGrass = st.vanSurface === 'grass';
-    S.glide(ctx, r.tires.gain, (v / 31) ** 0.8 * 0.35 * (onGrass ? 0.6 : 1));
+    S.glide(ctx, r.tires.gain, Math.min(v / 31, 1.4) ** 0.8 * 0.35 * (onGrass ? 0.6 : 1));
     S.glide(ctx, r.rough.gain, onGrass ? Math.min(v / 10, 1) * 0.22 : 0);
-    S.glide(ctx, r.wind.gain, (v / 31) ** 2 * 0.3);
+    S.glide(ctx, r.wind.gain, Math.min(v / 31, 1.4) ** 2 * 0.3);
 
     this.slip += (st.slip - this.slip) * 0.15;
     const squeal = onGrass ? 0 : this.slip * Math.min(v / 8, 1) * 0.22;

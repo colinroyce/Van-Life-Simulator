@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BUILD, Buildout } from './buildout.js';
 import { indoor, CAB_AMBIENT } from './indoor.js';
+import { buildGripHand, buildArm, layArm } from './hands.js';
 
 // Modeled on a Sprinter 144" wheelbase high roof. Van faces +Z, driver on the left (+X). Meters.
 export const VAN = {
@@ -303,6 +304,10 @@ const NEEDLE = mat(0xff5a1f, { emissive: 0xff3a00, emissiveIntensity: 0.8 });
 const WHEEL_MAT = cab(0x1d1e21, { roughness: 0.6 });
 const SKIN = cab(0xd9a07a);
 const SLEEVE = cab(0x3f6b8c);
+const SLEEVE_SMOOTH = indoor(new THREE.MeshStandardMaterial({ color: 0x3f6b8c, roughness: 0.9 }), CAB_AMBIENT);
+const RIM_GRIP = indoor(new THREE.MeshStandardMaterial({ color: 0x1d1e21, roughness: 0.55 }), CAB_AMBIENT);
+const RIM_RADIUS = 0.19;
+const RIM_TUBE = 0.025;
 const HAIR = cab(0x3a2a1e);
 
 const REFLECTIVE = [GLASS, PRIVACY_GLASS, MIRROR, CHROME, LENS, RIM];
@@ -645,10 +650,31 @@ function buildDashboard() {
 
   // Free-standing touchscreen in the center
   const screen = new THREE.Group();
-  screen.position.set(0, 1.47, 1.42);
+  screen.position.set(0, 1.5, 1.42);
   screen.rotation.x = 0.2;
   screen.add(box(0.36, 0.22, 0.03, DASH_DARK));
   screen.add(box(0.33, 0.19, 0.005, SCREEN, 0, 0, -0.016));
+  // Display surface (the GPS draws on it when the engine's running)
+  const display = new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.18), SCREEN);
+  display.name = 'gpsDisplay';
+  display.position.z = -0.0195;
+  display.rotation.y = Math.PI;
+  screen.add(display);
+  // Radio: a slim bar under the screen with a little LCD between two knobs
+  const radio = new THREE.Group();
+  radio.name = 'radioUnit';
+  radio.position.set(0, -0.138, 0.004);
+  radio.add(box(0.3, 0.05, 0.03, DASH_DARK));
+  const lcd = new THREE.Mesh(new THREE.PlaneGeometry(0.15, 0.036), SCREEN);
+  lcd.name = 'radioDisplay';
+  lcd.position.z = -0.0155;
+  lcd.rotation.y = Math.PI;
+  radio.add(lcd);
+  for (const kx of [-0.115, 0.115]) {
+    radio.add(cylinderZ(0.016, 0.014, 18, CHROME, kx, 0, -0.019));
+    radio.add(cylinderZ(0.012, 0.006, 18, DASH_TOP, kx, 0, -0.028));
+  }
+  screen.add(radio);
   g.add(screen);
 
   // Round air vents on the dash face
@@ -736,7 +762,9 @@ function buildInterior() {
 
   for (const side of [1, -1]) {
     if (side < 0) g.add(buildDoorCard(side)); // the driver's is on the door
-    g.add(buildSeat(side));
+    const seat = buildSeat(side);
+    if (side > 0) seat.userData.fixture = 'driverSeat';
+    g.add(seat);
     g.add(box(0.04, 0.08, 0.05, DASH_DARK, side * 0.9, 2.1, 0.38)); // seatbelt anchor
   }
   return g;
@@ -820,6 +848,29 @@ export class VanModel {
 
     this.#buildSteering();
     this.setOccupant('chase');
+    this.screen = this.body.getObjectByName('gpsDisplay');
+    // Rolled-up road map lying on the passenger seat
+    this.roadMap = new THREE.Group();
+    this.roadMap.position.set(-0.46, 1.205, 0.78);
+    this.roadMap.rotation.y = 0.5;
+    const roll = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.032, 0.42, 10), mat(0xeee4c8));
+    roll.rotation.z = Math.PI / 2;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.034, 0.034, 0.03, 10), mat(0xc0392b));
+    band.rotation.z = Math.PI / 2;
+    this.roadMap.add(roll, band);
+    this.body.add(this.roadMap);
+    this.screenOff = this.screen.material;
+    this.radioUnit = this.body.getObjectByName('radioUnit');
+    this.radioDisplay = this.body.getObjectByName('radioDisplay');
+  }
+
+  setRadioDisplay(material) {
+    this.radioDisplay.material = material ?? this.screenOff;
+  }
+
+  // Show a texture on the center touchscreen, or blank it (null).
+  setScreen(material) {
+    this.screen.material = material ?? this.screenOff;
   }
 
   // Reflections for paint, glass and chrome.
@@ -919,7 +970,7 @@ export class VanModel {
     column.add(this.wheelSpin);
 
     // Three-spoke wheel: spokes at 3, 9 and 6 o'clock around an airbag hub
-    this.wheelSpin.add(new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.025, 8, 24), WHEEL_MAT));
+    this.wheelSpin.add(new THREE.Mesh(new THREE.TorusGeometry(RIM_RADIUS, RIM_TUBE, 16, 96), RIM_GRIP));
     this.wheelSpin.add(box(0.13, 0.1, 0.05, WHEEL_MAT));
     for (const s of [1, -1]) {
       this.wheelSpin.add(box(0.11, 0.045, 0.02, WHEEL_MAT, s * 0.115, -0.01, 0.005));
@@ -931,18 +982,12 @@ export class VanModel {
     // Hands at 10 and 2. +X is the driver's left.
     this.hands = [];
     this.arms = [];
-    const armGeo = new THREE.CylinderGeometry(0.045, 0.055, 1, 6);
-    armGeo.translate(0, 0.5, 0);
     for (const side of [1, -1]) {
-      const hand = new THREE.Group();
-      hand.position.set(side * 0.165, 0.095, -0.02);
-      hand.rotation.z = side * -0.5;
-      hand.add(box(0.09, 0.1, 0.07, SKIN));
-      hand.add(box(0.05, 0.035, 0.05, SKIN, side * -0.04, 0.03, -0.02)); // thumb
+      const hand = buildGripHand(side, RIM_RADIUS, RIM_TUBE);
       this.wheelSpin.add(hand);
       this.hands.push(hand);
 
-      const arm = new THREE.Mesh(armGeo, SLEEVE);
+      const arm = buildArm(SLEEVE_SMOOTH);
       arm.userData.side = side;
       this.body.add(arm);
       this.arms.push(arm);
@@ -952,7 +997,7 @@ export class VanModel {
   // Applies simulation state to the scene graph.
   sync(sim) {
     this.root.position.copy(sim.position);
-    this.root.rotation.y = sim.yaw;
+    this.root.rotation.set(-sim.groundPitch, sim.yaw, sim.groundRoll, 'YXZ');
     this.body.rotation.set(sim.pitch, 0, sim.roll, 'YXZ');
 
     for (const w of this.wheels) {
@@ -966,19 +1011,14 @@ export class VanModel {
 
   #updateArms() {
     this.root.updateMatrixWorld(true);
-    const hand = new THREE.Vector3();
+    const wrist = new THREE.Vector3();
     const shoulder = new THREE.Vector3();
-    const up = new THREE.Vector3(0, 1, 0);
     this.arms.forEach((arm, i) => {
-      this.hands[i].getWorldPosition(hand);
-      this.body.worldToLocal(hand);
+      this.hands[i].getWorldPosition(wrist);
+      this.body.worldToLocal(wrist);
       shoulder.copy(this.shoulder);
       shoulder.x = VAN.eye.x + arm.userData.side * this.shoulder.x;
-      const dir = hand.sub(shoulder);
-      const len = dir.length();
-      arm.position.copy(shoulder);
-      arm.quaternion.setFromUnitVectors(up, dir.normalize());
-      arm.scale.set(1, len - 0.04, 1);
+      layArm(arm, shoulder, wrist);
     });
   }
 }

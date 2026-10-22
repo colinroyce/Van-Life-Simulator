@@ -3,7 +3,7 @@ import { VAN } from './model.js';
 
 // Arcade handling tuned to feel like a heavy, top-heavy van.
 const TUNING = {
-  maxSpeed: 31, // m/s (~70 mph)
+  maxSpeed: 53.6, // m/s (120 mph)
   maxReverse: 7,
   engineAccel: 3.8, // ~0-60 mph in 10s
   reverseAccel: 3,
@@ -20,6 +20,7 @@ const TUNING = {
   pitchPerAccel: 0.008,
   suspStiffness: 55,
   suspDamping: 7,
+  gravity: 9.81,
 };
 
 // Collision circles along the van's length (local z offset, radius).
@@ -41,6 +42,7 @@ function approach(value, target, rate) {
 
 export class VanSim {
   constructor() {
+    this.ground = () => 0; // height of the surface under (x, z)
     this.reset(new THREE.Vector3(), 0);
   }
 
@@ -60,6 +62,9 @@ export class VanSim {
     this.load = 0; // 0..1 how hard the engine is pulling
     this.slip = 0; // 0..1 tires sliding past grip
     this.impact = 0; // strongest hit during the last collide(), m/s into the obstacle
+    this.groundPitch = 0; // + = nose up, from the slope under the wheels
+    this.groundRoll = 0; // + = driver (left) side up
+    this.#followGround(1);
   }
 
   get forward() {
@@ -117,8 +122,14 @@ export class VanSim {
     this.yawRate = yawRate;
     this.yaw += yawRate * dt;
 
+    // Hills: gravity pulls along the slope, but the brakes (or the auto-hold when stopped) win
+    const holding = !input.throttle && (input.brake || Math.abs(this.speed) < 0.3) && Math.abs(this.speed) < 1;
+    if (holding && !input.brake) this.speed = 0;
+    else if (!holding) this.speed -= T.gravity * Math.sin(this.groundPitch) * dt;
+
     this.position.addScaledVector(this.forward, this.speed * dt);
     this.wheelSpin += (this.speed * dt) / VAN.wheelRadius;
+    this.#followGround(dt);
 
     // --- body lean on a springy suspension ---
     const longAccel = (this.speed - prevSpeed) / dt;
@@ -128,6 +139,28 @@ export class VanSim {
 
     if (input.handbrake && absV > 3) this.slip = Math.max(this.slip, Math.min(absV / 15, 1));
     this.#updateDrivetrain(dt, input);
+  }
+
+  // Sit the van on the ground: height from the four tire contact points, tilt from their differences.
+  #followGround(dt) {
+    const fwd = this.forward;
+    const lx = Math.cos(this.yaw); // left (+X when facing +Z)
+    const lz = -Math.sin(this.yaw);
+    const p = this.position;
+    const h = (along, side) => this.ground(p.x + fwd.x * along + lx * side, p.z + fwd.z * along + lz * side);
+    const t = VAN.trackHalf;
+    const fl = h(VAN.frontAxleZ, t);
+    const fr = h(VAN.frontAxleZ, -t);
+    const rl = h(VAN.rearAxleZ, t);
+    const rr = h(VAN.rearAxleZ, -t);
+    const pitch = Math.atan2((fl + fr - rl - rr) / 2, VAN.frontAxleZ - VAN.rearAxleZ);
+    const roll = Math.atan2((fl + rl - fr - rr) / 2, 2 * t);
+    const y = (fl + fr + rl + rr) / 4;
+    const k = dt >= 1 ? 1 : 1 - Math.exp(-18 * dt);
+    this.groundPitch += (pitch - this.groundPitch) * k;
+    this.groundRoll += (roll - this.groundRoll) * k;
+    this.position.y += (y - this.position.y) * (dt >= 1 ? 1 : 1 - Math.exp(-40 * dt));
+    this.position.y = Math.max(this.position.y, y - 0.03);
   }
 
   #updateDrivetrain(dt, input) {
@@ -161,7 +194,7 @@ export class VanSim {
   }
 
   // Push out of solid circles ({x, z, r}); returns the impact speed (m/s), 0 if no hit.
-  collide(obstacles, bounds) {
+  collide(obstacles) {
     this.impact = 0;
     const fwd = this.forward;
     for (const [offset, radius] of HULL) {
@@ -182,14 +215,14 @@ export class VanSim {
       }
     }
 
-    // Invisible walls at the edge of the sandbox
-    for (const axis of ['x', 'z']) {
-      if (Math.abs(this.position[axis]) > bounds) {
-        this.position[axis] = Math.sign(this.position[axis]) * bounds;
-        this.impact = Math.max(this.impact, Math.abs(this.speed));
-        this.speed *= -0.2;
-      }
-    }
+    return this.impact;
+  }
+
+  // Shove the van `depth` meters along (nx, nz), as if it hit a wall facing that way.
+  pushOut(nx, nz, depth) {
+    this.position.x += nx * depth;
+    this.position.z += nz * depth;
+    this.#absorbImpact(nx, nz);
     return this.impact;
   }
 
