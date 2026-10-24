@@ -19,6 +19,7 @@ import { Hotbar } from './items/hotbar.js';
 import { ItemSystem, describeItem } from './items/items.js';
 import { Fueling } from './items/fueling.js';
 import { Radio } from './audio/radio.js';
+import { DayNight } from './dayNight.js';
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -34,7 +35,8 @@ scene.fog = new THREE.Fog(0xd8ecf5, 120, 650);
 const hemi = new THREE.HemisphereLight(0xcfe8ff, 0x5f7f45, 1.3);
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
-const SUN_DIR = new THREE.Vector3(40, 70, 25);
+const SUN_DISTANCE = 90; // the shadow-casting light sits this far from the van, toward the sun
+const dayNight = new DayNight(scene);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 Object.assign(sun.shadow.camera, { left: -40, right: 40, top: 40, bottom: -40, near: 1, far: 200 });
@@ -81,7 +83,7 @@ items.extraAction = (fixture) => {
 // 'drive': in the driver's seat. 'walk': on foot, first person.
 let mode = 'drive';
 
-if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, radio, get mode() { return mode; } };
+if (import.meta.env.DEV) window.__game = { scene, world, van, sim, cameras, player, audio, needs, clock, sleepWheel, fade, hotbar, items, fueling, gps, radio, dayNight, get mode() { return mode; } };
 
 function reset(pose = world.spawn) {
   sim.reset(pose.position, pose.yaw);
@@ -388,17 +390,39 @@ function showConsequences() {
   hygieneThoughts.update(needs.values.hygiene);
 }
 
-// Weather for where you are on the trip (the sandbox keeps its fixed sky).
-function applyAtmosphere(a) {
-  if (!a) return;
-  scene.fog.color.copy(a.horizon);
-  scene.fog.near = a.fogNear;
-  scene.fog.far = a.fogFar;
-  hemi.color.copy(a.hemiSky);
-  hemi.groundColor.copy(a.hemiGround);
-  hemi.intensity = a.hemi;
-  sun.intensity = a.sun;
+// Weather for where you are on the trip, then the time of day on top of it.
+function applyLighting(focus, camera) {
+  const l = dayNight.update(clock.hourOfDay, world.frame(focus, camera), camera);
+  scene.fog.color.copy(l.horizon);
+  scene.fog.near = l.fogNear;
+  scene.fog.far = l.fogFar;
+  hemi.color.copy(l.hemiSky);
+  hemi.groundColor.copy(l.hemiGround);
+  hemi.intensity = l.hemi;
+  sun.color.copy(l.lightColor);
+  sun.intensity = l.lightIntensity;
+  sun.target.position.copy(focus);
+  sun.position.copy(focus).addScaledVector(l.lightDir, SUN_DISTANCE);
+  updateHeadlights(l.daylight);
 }
+
+// Headlights come on by themselves at dusk and go off after sunrise; L overrides that until
+// the next time it would switch on its own.
+const HEADLIGHTS_AT = 0.45; // daylight level
+let headlightOverride = null; // null = auto, else forced on/off
+let autoWasOn = null;
+function updateHeadlights(daylight) {
+  const auto = daylight < HEADLIGHTS_AT;
+  if (autoWasOn !== null && auto !== autoWasOn) headlightOverride = null;
+  autoWasOn = auto;
+  const on = headlightOverride ?? auto;
+  if (on !== van.headlightsOn) van.setHeadlights(on);
+}
+onKey('KeyL', () => {
+  if (mode !== 'drive') return;
+  headlightOverride = !van.headlightsOn;
+  flashCamLabel(headlightOverride ? 'Headlights on' : 'Headlights off');
+});
 
 // --- loop ---
 const frameClock = new THREE.Clock();
@@ -537,9 +561,7 @@ function tick(dt) {
     footSurface: player.inside ? 'van' : world.surfaceAt(player.position.x, player.position.z),
   });
 
-  sun.target.position.copy(focus);
-  sun.position.copy(focus).add(SUN_DIR);
-  applyAtmosphere(world.frame(focus, camera));
+  applyLighting(focus, camera);
 
   // The GPS lives on the dash touchscreen: on with the engine, drawn while you can see it
   if (gps && engineRunning) {

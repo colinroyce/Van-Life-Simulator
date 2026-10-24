@@ -37,24 +37,6 @@ const ATMOS_BLEND = 700;
 
 const mat = (color, opts = {}) => new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, ...opts });
 
-function buildSky() {
-  const m = new THREE.ShaderMaterial({
-    side: THREE.BackSide,
-    depthWrite: false,
-    fog: false,
-    uniforms: { top: { value: new THREE.Color() }, horizon: { value: new THREE.Color() } },
-    vertexShader: `varying vec3 vPos;
-      void main() { vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `uniform vec3 top; uniform vec3 horizon; varying vec3 vPos;
-      void main() { float h = clamp(normalize(vPos).y * 2.5, 0.0, 1.0);
-        gl_FragColor = vec4(mix(horizon, top, h), 1.0); }`,
-  });
-  const sky = new THREE.Mesh(new THREE.SphereGeometry(7000, 24, 12), m);
-  sky.renderOrder = -1;
-  sky.frustumCulled = false;
-  return sky;
-}
-
 function buildLot() {
   const g = new THREE.Group();
   const asphalt = new THREE.Mesh(new THREE.PlaneGeometry(LOT.x1 - LOT.x0, LOT.z1 - LOT.z0), mat(0x4a4d52));
@@ -97,7 +79,6 @@ export class RoadTripWorld {
     this.spawn = SPAWN;
     this.destination = this.route.sections.at(-1).region;
 
-    this.sky = buildSky();
     this.ocean = new THREE.Mesh(
       new THREE.CircleGeometry(8000, 48),
       new THREE.MeshStandardMaterial({ color: 0x2c6d8c, roughness: 0.25, metalness: 0.1 }),
@@ -108,7 +89,7 @@ export class RoadTripWorld {
     this.nearGroup = new THREE.Group();
     this.farGroup = new THREE.Group();
     this.lot = buildLot();
-    scene.add(this.sky, this.ocean, this.road, this.nearGroup, this.farGroup, this.lot);
+    scene.add(this.ocean, this.road, this.nearGroup, this.farGroup, this.lot);
 
     this.nearMaterial = mat(0xffffff, { vertexColors: true, roughness: 0.95 });
     this.farMaterial = farMaterial();
@@ -192,12 +173,11 @@ export class RoadTripWorld {
     this.farTiles.set(`${ix},${iz}`, tile);
   }
 
-  // Per frame: stream terrain around the van, keep the sky and sea centered on the camera,
+  // Per frame: stream terrain around the van, keep the sea centered on the camera,
   // and blend the weather for where you are on the trip.
   frame(focus, camera) {
     this.stream(focus, 1);
     const eye = camera.getWorldPosition(this.#eye);
-    this.sky.position.copy(eye);
     this.ocean.position.x = eye.x;
     this.ocean.position.z = eye.z;
     const here = this.locate(focus.x, focus.z);
@@ -240,8 +220,6 @@ export class RoadTripWorld {
     // fog distances blend in log space so the whiteout closes in gradually
     for (const key of ['fogNear', 'fogFar']) out[key] = Math.exp(Math.log(A[key]) + (Math.log(B[key]) - Math.log(A[key])) * k);
     for (const key of ['hemi', 'sun']) out[key] = A[key] + (B[key] - A[key]) * k;
-    this.sky.material.uniforms.top.value.copy(out.top);
-    this.sky.material.uniforms.horizon.value.copy(out.horizon);
     return out;
   }
 

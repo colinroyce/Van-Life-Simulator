@@ -3,7 +3,7 @@ import { VAN } from './model.js';
 
 // Arcade handling tuned to feel like a heavy, top-heavy van.
 const TUNING = {
-  maxSpeed: 53.6, // m/s (120 mph)
+  maxSpeed: 40.2, // m/s (90 mph)
   maxReverse: 7,
   engineAccel: 3.8, // ~0-60 mph in 10s
   reverseAccel: 3,
@@ -126,6 +126,7 @@ export class VanSim {
     const holding = !input.throttle && (input.brake || Math.abs(this.speed) < 0.3) && Math.abs(this.speed) < 1;
     if (holding && !input.brake) this.speed = 0;
     else if (!holding) this.speed -= T.gravity * Math.sin(this.groundPitch) * dt;
+    this.speed = Math.min(this.speed, T.maxSpeed); // hard cap, even rolling downhill
 
     this.position.addScaledVector(this.forward, this.speed * dt);
     this.wheelSpin += (this.speed * dt) / VAN.wheelRadius;

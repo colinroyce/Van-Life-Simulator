@@ -5,57 +5,61 @@ import * as S from './synth.js';
 // Stations keep "broadcasting" while you're tuned away: each has its own clock, so tuning back
 // in drops you into the middle of whatever's on, like real radio.
 
-const track = (file, title, artist, seconds) => ({ src: `/radio/${file}.m4a`, title, artist, seconds });
+// `loudness` is each file's measured average level (RMS dBFS); tracks get leveled to a common
+// target before the station's compressor, so a Chopin nocturne isn't 20 dB quieter than synthwave.
+const track = (file, title, artist, seconds, loudness) => ({ src: `/radio/${file}.m4a`, title, artist, seconds, loudness });
+const TARGET_LOUDNESS = -18;
+const MAX_BOOST = 14; // dB
 
 export const STATIONS = [
   {
     freq: '88.5',
     name: 'KROD Roadhouse',
     tracks: [
-      track('classics-tiger-rag', 'Tiger Rag', 'Original Dixieland Jass Band', 184.9),
-      track('classics-forever-blowing-bubbles', "I'm Forever Blowing Bubbles", 'Ben Selvin', 203.7),
-      track('classics-krooked-blues', 'Krooked Blues', "King Oliver's Creole Jazz Band", 174.8),
-      track('classics-dippermouth-blues', 'Dippermouth Blues', "King Oliver's Jazz Band", 143.7),
-      track('classics-st-louis-blues', 'St. Louis Blues', 'Bessie Smith & Louis Armstrong', 190.1),
+      track('classics-tiger-rag', 'Tiger Rag', 'Original Dixieland Jass Band', 184.9, -12.9),
+      track('classics-forever-blowing-bubbles', "I'm Forever Blowing Bubbles", 'Ben Selvin', 203.7, -17.0),
+      track('classics-krooked-blues', 'Krooked Blues', "King Oliver's Creole Jazz Band", 174.8, -16.7),
+      track('classics-dippermouth-blues', 'Dippermouth Blues', "King Oliver's Jazz Band", 143.7, -21.3),
+      track('classics-st-louis-blues', 'St. Louis Blues', 'Bessie Smith & Louis Armstrong', 190.1, -16.8),
     ],
   },
   {
     freq: '94.1',
     name: 'Chill FM',
     tracks: [
-      track('lofi-chill-lofi-inspired', 'Chill Lofi Inspired', 'omfgdude', 123.2),
-      track('lofi-a-cup-of-tea', 'A Cup of Tea', 'TAD', 168.8),
-      track('lofi-countryside', 'Countryside', 'TAD', 92.1),
-      track('lofi-oceanside', 'Oceanside', 'TAD', 102.5),
-      track('lofi-since-2-am', 'Since 2 A.M.', 'TAD', 256.5),
-      track('lofi-happy-lofi-day', 'Happy Lofi Day', 'Tarush Singhal', 116.4),
+      track('lofi-chill-lofi-inspired', 'Chill Lofi Inspired', 'omfgdude', 123.2, -18.0),
+      track('lofi-a-cup-of-tea', 'A Cup of Tea', 'TAD', 168.8, -16.6),
+      track('lofi-countryside', 'Countryside', 'TAD', 92.1, -20.1),
+      track('lofi-oceanside', 'Oceanside', 'TAD', 102.5, -17.7),
+      track('lofi-since-2-am', 'Since 2 A.M.', 'TAD', 256.5, -20.9),
+      track('lofi-happy-lofi-day', 'Happy Lofi Day', 'Tarush Singhal', 116.4, -17.5),
     ],
   },
   {
     freq: '99.7',
     name: 'Classical 99.7',
     tracks: [
-      track('classical-morning-mood', 'Morning Mood', 'Grieg · Musopen Symphony', 229.2),
-      track('classical-gymnopedie-1', 'Gymnopédie No. 1', 'Satie', 183.6),
-      track('classical-nocturne-op15-1', 'Nocturne Op. 15 No. 1', 'Chopin', 305.5),
-      track('classical-nocturne-op55-1', 'Nocturne Op. 55 No. 1', 'Chopin', 316.7),
-      track('classical-moonlight-sonata', 'Moonlight Sonata, I.', 'Beethoven', 335.8),
+      track('classical-morning-mood', 'Morning Mood', 'Grieg · Musopen Symphony', 229.2, -23.2),
+      track('classical-gymnopedie-1', 'Gymnopédie No. 1', 'Satie', 183.6, -29.0),
+      track('classical-nocturne-op15-1', 'Nocturne Op. 15 No. 1', 'Chopin', 305.5, -26.0),
+      track('classical-nocturne-op55-1', 'Nocturne Op. 55 No. 1', 'Chopin', 316.7, -28.5),
+      track('classical-moonlight-sonata', 'Moonlight Sonata, I.', 'Beethoven', 335.8, -34.9),
     ],
   },
   {
     freq: '104.3',
     name: 'Night Drive',
     tracks: [
-      track('synth-midnight-cruiser', 'Midnight Cruiser', 'Zane Little', 144.4),
-      track('synth-space-city', 'Space City', 'MintoDog', 116.9),
-      track('synth-synth-wave', 'Synth Wave', 'Pro Sensory', 192.1),
-      track('synth-calm-ambient-1', 'Calm Ambient 1', 'cynicmusic', 157.9),
-      track('synth-synthwave-type', 'synthwave_type', 'G_P', 113.2),
+      track('synth-midnight-cruiser', 'Midnight Cruiser', 'Zane Little', 144.4, -15.2),
+      track('synth-space-city', 'Space City', 'MintoDog', 116.9, -14.1),
+      track('synth-synth-wave', 'Synth Wave', 'Pro Sensory', 192.1, -13.7),
+      track('synth-calm-ambient-1', 'Calm Ambient 1', 'cynicmusic', 157.9, -20.5),
+      track('synth-synthwave-type', 'synthwave_type', 'G_P', 113.2, -11.9),
     ],
   },
 ];
 
-const VOLUME = 0.55;
+const VOLUME = 1.35; // tuned so music sits above the engine and wind at top speed
 const STATIC_TIME = 0.35; // seconds of hiss between stations
 
 export class Radio {
@@ -169,6 +173,8 @@ export class Radio {
     const t = STATIONS[station].tracks[index];
     this.nowPlaying = t;
     if (!this.el.src.endsWith(t.src)) this.el.src = t.src;
+    const boost = Math.min(TARGET_LOUDNESS - t.loudness, MAX_BOOST);
+    if (this.leveler) S.glide(this.audio.ctx, this.leveler.gain, 10 ** (boost / 20), 0.05);
     const start = () => {
       if (this.station !== station) return;
       this.el.currentTime = Math.min(offset, Math.max(t.seconds - 1, 0));
@@ -184,8 +190,17 @@ export class Radio {
     if (this.out || !a.ctx) return;
     const ctx = a.ctx;
     this.out = S.gain(ctx, VOLUME);
+    this.leveler = S.gain(ctx, 1);
+    // Broadcast-style compression keeps quiet passages audible over road noise, like real FM
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -26;
+    comp.knee.value = 10;
+    comp.ratio.value = 4;
+    comp.attack.value = 0.01;
+    comp.release.value = 0.3;
+    const makeup = S.gain(ctx, 2.2);
     const source = ctx.createMediaElementSource(this.el);
-    S.chain(source, S.filter(ctx, 'highpass', 90, 0.7), S.filter(ctx, 'lowpass', 11000, 0.7), this.out, a.cabin);
+    S.chain(source, this.leveler, comp, makeup, S.filter(ctx, 'highpass', 90, 0.7), S.filter(ctx, 'lowpass', 11000, 0.7), this.out, a.cabin);
   }
 
   #hiss() {

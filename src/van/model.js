@@ -281,6 +281,7 @@ const LENS = mat(0x8e979e, { roughness: 0.05, metalness: 0.4 });
 const HOUSING = mat(0x1b1d20, { roughness: 0.3, metalness: 0.5 });
 const DRL = mat(0xffffff, { emissive: 0xf4f8ff, emissiveIntensity: 1.5 });
 const TAIL = mat(0xa01a14, { roughness: 0.2, emissive: 0x5a0a06, emissiveIntensity: 0.6 });
+const HEAD_LENS = mat(0x8e979e, { roughness: 0.05, metalness: 0.4, emissive: 0xfff4dc, emissiveIntensity: 0 });
 const AMBER = mat(0xd98a1a, { roughness: 0.2, emissive: 0x6a3a00, emissiveIntensity: 0.6 });
 const PLATE = mat(0xd9d9d2);
 const TIRE = mat(0x1c1c1e, { roughness: 0.95 });
@@ -310,7 +311,7 @@ const RIM_RADIUS = 0.19;
 const RIM_TUBE = 0.025;
 const HAIR = cab(0x3a2a1e);
 
-const REFLECTIVE = [GLASS, PRIVACY_GLASS, MIRROR, CHROME, LENS, RIM];
+const REFLECTIVE = [GLASS, PRIVACY_GLASS, MIRROR, CHROME, LENS, HEAD_LENS, RIM];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -467,7 +468,7 @@ function buildExterior(paint) {
     const head = new THREE.Group();
     head.position.set(side * 0.69, 0.95, nose - 0.02);
     head.rotation.y = side * 0.3;
-    head.add(box(0.38, 0.21, 0.12, LENS));
+    head.add(box(0.38, 0.21, 0.12, HEAD_LENS));
     head.add(box(0.36, 0.16, 0.02, HOUSING, 0, 0.012, 0.055));
     for (const x of [-0.09, 0.07]) head.add(cylinderZ(0.05, 0.02, 10, CHROME, side * x, 0.02, 0.065));
     head.add(box(0.36, 0.025, 0.02, DRL, 0, -0.085, 0.062)); // LED strip
@@ -806,6 +807,8 @@ function buildWheel(side) {
 }
 
 // ---------------------------------------------------------------------------
+const HEADLIGHT_INTENSITY = 260; // candela
+
 const SHOULDERS = {
   cockpit: new THREE.Vector3(0.24, 1.45, 0.55), // kept low so the arms don't fill the view
   chase: new THREE.Vector3(0.2, 1.66, 0.62),
@@ -847,6 +850,7 @@ export class VanModel {
     }
 
     this.#buildSteering();
+    this.#buildHeadlights();
     this.setOccupant('chase');
     this.screen = this.body.getObjectByName('gpsDisplay');
     // Rolled-up road map lying on the passenger seat
@@ -862,6 +866,27 @@ export class VanModel {
     this.screenOff = this.screen.material;
     this.radioUnit = this.body.getObjectByName('radioUnit');
     this.radioDisplay = this.body.getObjectByName('radioDisplay');
+  }
+
+  // Two forward spotlights, kept in the scene at zero intensity when off so turning them on
+  // doesn't make every material recompile.
+  #buildHeadlights() {
+    this.headlights = [];
+    this.headlightsOn = false;
+    for (const side of [1, -1]) {
+      const light = new THREE.SpotLight(0xfff2da, 0, 90, 0.52, 0.5, 1.2);
+      light.position.set(side * 0.69, 0.95, VAN.noseZ + 0.05);
+      light.target.position.set(side * 0.9, 0.2, VAN.noseZ + 30);
+      this.body.add(light, light.target);
+      this.headlights.push(light);
+    }
+  }
+
+  setHeadlights(on) {
+    this.headlightsOn = on;
+    for (const l of this.headlights) l.intensity = on ? HEADLIGHT_INTENSITY : 0;
+    HEAD_LENS.emissiveIntensity = on ? 2.2 : 0;
+    TAIL.emissiveIntensity = on ? 1.8 : 0.6;
   }
 
   setRadioDisplay(material) {

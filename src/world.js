@@ -12,6 +12,12 @@ const LOT = { x0: 30, x1: 66, z0: 18, z1: 62 };
 const STORE = { x: 57, z: 40, facing: -Math.PI / 2 }; // front faces the pad (-X)
 const PUMPS = { x: 42, z: 40, facing: 0 }; // island runs north-south; hose side faces west
 
+const SANDBOX_ATMOS = {
+  top: new THREE.Color(0x5fa8e0), horizon: new THREE.Color(0xd8ecf5),
+  hemiSky: new THREE.Color(0xcfe8ff), hemiGround: new THREE.Color(0x5f7f45),
+  hemi: 1.3, sun: 2.4, fogNear: 120, fogFar: 650, clear: 1,
+};
+
 const mat = (color, opts = {}) =>
   new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: 0.85, ...opts });
 
@@ -211,7 +217,7 @@ export class World {
     const ground = buildGround(rand);
     const pad = buildPad();
     const lot = buildLot();
-    scene.add(buildSky(), ground, pad, lot, buildMountains(rand));
+    scene.add(ground, pad, lot, buildMountains(rand));
 
     this.store = new ConvenienceStore();
     this.store.place(scene, STORE.x, STORE.z, STORE.facing);
@@ -285,8 +291,9 @@ export class World {
     return this.obstacles;
   }
 
+  // Fixed noon weather (time of day is layered on top in main).
   frame() {
-    return null; // fixed weather
+    return SANDBOX_ATMOS;
   }
 
   locate() {
